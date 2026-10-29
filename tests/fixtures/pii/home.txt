@@ -1,0 +1,2 @@
+path /home/alice/x
+mac /Users/Bob/Library

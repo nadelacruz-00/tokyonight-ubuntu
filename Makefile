@@ -19,7 +19,7 @@ lint:
 	@if [ -n "$(PY_PATHS)" ]; then $(BIN)/ruff check $(PY_PATHS); fi
 
 pii:
-	@echo "pii: no scanner yet"
+	@python3 -I helpers/pii_scan.py $$([ -f .pii-denylist ] && echo "--denylist .pii-denylist") .
 
 test-bats:
 	@$(BATS) tests/bats/*.bats
