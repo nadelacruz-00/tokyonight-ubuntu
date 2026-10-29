@@ -7,3 +7,5 @@ IFS=$'\n\t'
 args=""
 if (($#)); then args=$(printf '%q ' "$@"); fi
 printf '%s\t%s\n' "${0##*/}" "${args% }" >>"${STUB_LOG:-/dev/null}"
+# A test can play the app's side effects (e.g. writing window-size).
+if [[ -x ${STUB_STATE:-/nonexistent}/ptyxis-run ]]; then "$STUB_STATE/ptyxis-run" "$@"; fi

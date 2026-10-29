@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Stub: logs the call; exits ${STUB_BUSCTL_RC:-0} (never touches a real bus).
+# 'set-property ... NAME TYPE VALUE' stores "TYPE VALUE" in $STUB_STATE/busctl.NAME
+# (not when $STUB_BUSCTL_STUCK is set); 'get-property ... NAME' prints it
+# (default "b false").
 set -Eeuo pipefail
 shopt -s inherit_errexit
 IFS=$'\n\t'
@@ -7,4 +10,22 @@ IFS=$'\n\t'
 args=""
 if (($#)); then args=$(printf '%q ' "$@"); fi
 printf '%s\t%s\n' "${0##*/}" "${args% }" >>"${STUB_LOG:-/dev/null}"
-exit "${STUB_BUSCTL_RC:-0}"
+rc=${STUB_BUSCTL_RC:-0}
+((rc == 0)) || exit "$rc"
+verb=""
+for a in "$@"; do
+  case $a in set-property | get-property) verb=$a ;; esac
+done
+args=("$@")
+n=${#args[@]}
+case $verb in
+  set-property)
+    if [[ -z ${STUB_BUSCTL_STUCK:-} && -n ${STUB_STATE:-} ]]; then
+      printf '%s %s\n' "${args[n - 2]}" "${args[n - 1]}" >"$STUB_STATE/busctl.${args[n - 3]}"
+    fi
+    ;;
+  get-property)
+    f="${STUB_STATE:-/nonexistent}/busctl.${args[n - 1]}"
+    if [[ -f $f ]]; then cat -- "$f"; else echo "b false"; fi
+    ;;
+esac

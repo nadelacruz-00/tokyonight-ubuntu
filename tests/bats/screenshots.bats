@@ -173,13 +173,23 @@ python3 -I -c 'import sys,zlib,struct
 def c(t,b): return struct.pack(">I",len(b))+t+b+struct.pack(">I",zlib.crc32(t+b)&0xffffffff)
 open(sys.argv[1],"wb").write(b"\x89PNG\r\n\x1a\n"+c(b"IHDR",struct.pack(">IIBBBBB",1,1,8,2,0,0,0))+c(b"IDAT",zlib.compress(b"\x00\xff\x00\x00"))+c(b"IEND",b""))' "$1"
 FAKE
-  printf '#!/usr/bin/env bash\nprintf "inject\\t%%s\\n" "$1" >>"$STUB_LOG"\n' >"$BATS_TEST_TMPDIR/fake-inject"
+  # fake injector: logs; typing "e x i t Return" ends the fake demo shell
+  # (removes demo-alive) when TYPING_EXITS is set
+  cat >"$BATS_TEST_TMPDIR/fake-inject" <<'INJ'
+#!/usr/bin/env bash
+printf 'inject\t%s\n' "$*" >>"$STUB_LOG"
+if [[ "$*" == "e x i t Return" && -n ${TYPING_EXITS:-} ]]; then rm -f "$BATS_TEST_TMPDIR/demo-alive"; fi
+INJ
   chmod +x "$BATS_TEST_TMPDIR/fake-capture" "$BATS_TEST_TMPDIR/fake-inject"
   export TNU_SHOT_CAPTURE="$BATS_TEST_TMPDIR/fake-capture" TNU_INJECT_KEYS="$BATS_TEST_TMPDIR/fake-inject"
   OSK_DIR="$SYS_ROOT/usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/schemas"
   mkdir -p "$OSK_DIR"
   gsettings set org.gnome.shell.keybindings toggle-quick-settings "['<Super>s']"
-  gsettings set org.gnome.shell.extensions.gjsosk.indicator opened false
+  gsettings set org.gnome.shell.extensions.gjsosk.indicator keyboard-visible false
+  gsettings set org.gnome.mutter dynamic-workspaces true
+  gsettings set org.gnome.desktop.wm.keybindings switch-to-workspace-last "['<Super>End']"
+  gsettings set org.gnome.desktop.wm.keybindings switch-to-workspace-1 "['<Super>Home']"
+  dconf write /org/gnome/Ptyxis/window-size "(uint32 80, uint32 24)"
   : >"$STUB_LOG"
 }
 
@@ -190,6 +200,14 @@ _live_source() {
   pause() { printf 'pause\t%s\n' "$1" >>"$STUB_LOG"; }
   countdown() { printf 'countdown\t%s\n' "$1" >>"$STUB_LOG"; }
   ask() { echo READ >>"$READ_LOG"; }
+  # the demo shell is "alive" while demo-alive exists; TERM ends it when
+  # TERM_EXITS is set
+  demo_pids() { if [[ -n $TMP_DEMO && -e $BATS_TEST_TMPDIR/demo-alive ]]; then echo 4242; fi; }
+  demo_signal() {
+    local IFS=' '
+    printf 'signal\t%s\n' "$*" >>"$STUB_LOG"
+    if [[ -n ${TERM_EXITS:-} ]]; then rm -f "$BATS_TEST_TMPDIR/demo-alive"; fi
+  }
 }
 
 # _assert_order ERE...: each pattern matches a STUB_LOG line after the previous.
@@ -281,17 +299,28 @@ OSKG='gsettings\t--schemadir .*gjsosk@vishram1123\.com/schemas'
   _live_env
   _live_source
   parse_args --auto osk quick-settings ptyxis overview desktop
+  : >"$BATS_TEST_TMPDIR/demo-alive"
+  export TYPING_EXITS=1
   run_auto
   _assert_order '^countdown\t10$' \
+    '^gsettings\tget org\.gnome\.mutter dynamic-workspaces$' \
+    '^gsettings\tget org\.gnome\.desktop\.wm\.keybindings switch-to-workspace-last$' \
+    '^inject\t<Super>End$' '^pause\t0\.7$' \
     '^capture\tdesktop-tokyonight\.png$' \
     "^$OV true$" '^pause\t1$' '^capture\toverview\.png$' "^$OV false$" \
+    '^busctl\t--user get-property org\.gnome\.Shell /org/gnome/Shell org\.gnome\.Shell OverviewActive$' \
     '^gsettings\tget org\.gnome\.shell\.keybindings toggle-quick-settings$' \
     '^inject\t<Super>s$' '^pause\t1$' '^capture\tquick-settings\.png$' '^inject\tEscape$' \
     '^pause\t4$' '^capture\tptyxis-tokyonight\.png$' \
-    "^$OSKG get org\.gnome\.shell\.extensions\.gjsosk\.indicator opened$" \
-    "^$OSKG set org\.gnome\.shell\.extensions\.gjsosk\.indicator opened true$" \
+    '^inject\te x i t Return$' \
+    "^$OSKG get org\.gnome\.shell\.extensions\.gjsosk\.indicator keyboard-visible$" \
+    "^$OSKG set org\.gnome\.shell\.extensions\.gjsosk\.indicator keyboard-visible true$" \
     '^pause\t1\.5$' '^capture\tosk\.png$' \
-    "^$OSKG set org\.gnome\.shell\.extensions\.gjsosk\.indicator opened false$"
+    "^$OSKG set org\.gnome\.shell\.extensions\.gjsosk\.indicator keyboard-visible false$" \
+    '^inject\t<Super>Home$'
+  refute_stub_called signal
+  refute_stub_called gsettings '.*opened'
+  [[ $WS_MOVED == 0 ]]
   run grep -c '^countdown' "$STUB_LOG"
   assert_output 1
   run cat "$READ_LOG"
@@ -299,8 +328,8 @@ OSKG='gsettings\t--schemadir .*gjsosk@vishram1123\.com/schemas'
   [[ ${#OUTS[@]} == 5 ]]
   assert_stub_called ptyxis '--new-window -- env -i'
   refute_stub_called busctl '.*FocusSearch' 
-  # the gjsosk key is back to what it was
-  run gsettings get org.gnome.shell.extensions.gjsosk.indicator opened
+  # the OSK is back to hidden
+  run gsettings get org.gnome.shell.extensions.gjsosk.indicator keyboard-visible
   assert_output false
   refute_stub_called flatpak
 }
@@ -314,7 +343,7 @@ OSKG='gsettings\t--schemadir .*gjsosk@vishram1123\.com/schemas'
   run cat "$BATS_TEST_TMPDIR/err"
   assert_output --partial "osk shot skipped"
   refute_stub_called capture
-  refute_stub_called gsettings ".*opened"
+  refute_stub_called gsettings ".*keyboard-visible"
 }
 
 @test "--auto: a manual fallback is a failure, never a prompt" {
@@ -330,19 +359,146 @@ OSKG='gsettings\t--schemadir .*gjsosk@vishram1123\.com/schemas'
   export FAIL_ON=quick-settings.png
   run "$TNU_ROOT/tools/screenshots.sh" --auto --delay 0 quick-settings
   assert_failure 1
-  _assert_order '^inject\t<Super>s$' '^capture\tquick-settings\.png$' '^inject\tEscape$'
+  _assert_order '^inject\t<Super>End$' '^inject\t<Super>s$' '^capture\tquick-settings\.png$' \
+    '^inject\tEscape$' '^inject\t<Super>Home$'
 }
 
-@test "--auto: the osk key is restored by the trap when its capture fails" {
+@test "--auto: the OSK is hidden again by the trap when its capture fails" {
   _live_env
-  gsettings set org.gnome.shell.extensions.gjsosk.indicator opened "'odd value'"
-  : >"$STUB_LOG"
   export FAIL_ON=osk.png
   run "$TNU_ROOT/tools/screenshots.sh" --auto --delay 0 osk
   assert_failure 1
-  _assert_order "opened true$" '^capture\tosk\.png$' "opened \\\\'odd\\\\ value\\\\'$"
-  run gsettings get org.gnome.shell.extensions.gjsosk.indicator opened
-  assert_output "'odd value'"
+  _assert_order "keyboard-visible true$" '^capture\tosk\.png$' "keyboard-visible false$" '^inject\t<Super>Home$'
+  run gsettings get org.gnome.shell.extensions.gjsosk.indicator keyboard-visible
+  assert_output false
+}
+
+@test "--auto osk: an already visible OSK is left exactly as it is" {
+  _live_env
+  gsettings set org.gnome.shell.extensions.gjsosk.indicator keyboard-visible true
+  : >"$STUB_LOG"
+  _live_source
+  parse_args --auto osk
+  run_auto
+  assert_stub_called capture 'osk\.png$'
+  refute_stub_called gsettings '.* set '
+  run gsettings get org.gnome.shell.extensions.gjsosk.indicator keyboard-visible
+  assert_output true
+}
+
+@test "--auto osk: a keyboard that refuses to open stops the run (nothing captured)" {
+  _live_env
+  _live_source
+  osk_set() { :; } # the extension writes keyboard-visible back to false
+  parse_args --auto osk
+  run run_auto
+  assert_failure 1
+  assert_output --partial "could not open the on-screen keyboard"
+  refute_stub_called capture
+}
+
+@test "--auto osk: a keyboard that does not close stops the run" {
+  _live_env
+  _live_source
+  osk_get() { echo true; }
+  OSK_PREV=false
+  run assert_undone osk
+  assert_failure 1
+  assert_output --partial "not back to keyboard-visible=false"
+}
+
+@test "--auto: the overview staying open stops the run before the next shot" {
+  _live_env
+  export STUB_BUSCTL_STUCK=1
+  busctl --user set-property org.gnome.Shell /org/gnome/Shell org.gnome.Shell OverviewActive b true
+  printf 'b true\n' >"$STUB_STATE/busctl.OverviewActive"
+  _live_source
+  parse_args --auto overview desktop
+  run run_auto
+  assert_failure 1
+  assert_output --partial "overview"
+  assert_output --partial "stopping"
+  refute_stub_called capture
+}
+
+@test "--auto: no workspace switch without dynamic workspaces (stops, nothing injected)" {
+  _live_env
+  gsettings set org.gnome.mutter dynamic-workspaces false
+  run "$TNU_ROOT/tools/screenshots.sh" --auto --delay 0 desktop
+  assert_failure 1
+  assert_output --partial "dynamic workspaces"
+  refute_stub_called inject
+  refute_stub_called capture
+}
+
+@test "demo zshrc: no long listing, nothing that prints user or host names; traps TERM/HUP" {
+  _live_env
+  _live_source
+  demo_prepare
+  local rc="$TMP_DEMO/home/.zshrc"
+  run grep -E '(^|[[:space:];|])ls[[:space:]].*(^|[[:space:]])-[A-Za-z]*l' "$rc"
+  assert_failure
+  run grep -En '(^|[^[:alnum:]_-])(id|whoami|hostname|users|who|logname|stat)([^[:alnum:]_-]|$)' "$rc"
+  assert_failure
+  run grep -c '^TRAPTERM() { exit 0 }$\|^TRAPHUP() { exit 0 }$' "$rc"
+  assert_output 2
+  rm -rf "$TMP_DEMO"
+}
+
+@test "demo close: exit typed into the demo shell first, no signal needed" {
+  _live_env
+  _live_source
+  parse_args --auto ptyxis
+  : >"$BATS_TEST_TMPDIR/demo-alive"
+  export TYPING_EXITS=1
+  run_auto
+  _assert_order '^capture\tptyxis-tokyonight\.png$' '^inject\te x i t Return$'
+  refute_stub_called signal
+  [[ $DEMO_LEFT == 0 && -z $TMP_DEMO ]]
+}
+
+@test "demo close: TERM as a fallback when typing exit did not end the shell" {
+  _live_env
+  _live_source
+  parse_args --auto ptyxis
+  : >"$BATS_TEST_TMPDIR/demo-alive"
+  export TERM_EXITS=1
+  run_auto
+  _assert_order '^inject\te x i t Return$' '^signal\tTERM 4242$'
+  refute_stub_called signal 'KILL'
+}
+
+@test "demo close: a shell that survives TERM and KILL stops the run" {
+  _live_env
+  _live_source
+  parse_args --auto ptyxis osk
+  : >"$BATS_TEST_TMPDIR/demo-alive"
+  run run_auto
+  assert_failure 1
+  assert_output --partial "the demo terminal did not close"
+  assert_stub_called signal 'KILL 4242'
+  refute_stub_called capture 'osk\.png'
+}
+
+@test "demo window: Ptyxis dconf keys it changed (window-size, new keys) are put back" {
+  _live_env
+  cat >"$STUB_STATE/ptyxis-run" <<'PT'
+#!/usr/bin/env bash
+dconf write /org/gnome/Ptyxis/window-size "(uint32 120, uint32 40)"
+dconf write /org/gnome/Ptyxis/Profiles/demoprofile/opacity 0.9
+PT
+  chmod +x "$STUB_STATE/ptyxis-run"
+  local before
+  before=$(dconf dump /org/gnome/Ptyxis/)
+  _live_source
+  # let the (background) fake Ptyxis write its keys while the window is "open"
+  pause() { if [[ $1 == 4 ]]; then sleep 1; fi; }
+  parse_args --auto ptyxis
+  run_auto
+  [[ $(dconf read /org/gnome/Ptyxis/window-size) == "(uint32 80, uint32 24)" ]]
+  [[ -z $(dconf read /org/gnome/Ptyxis/Profiles/demoprofile/opacity) ]]
+  [[ $(dconf dump /org/gnome/Ptyxis/) == "$before" ]]
+  assert_stub_called dconf 'reset /org/gnome/Ptyxis/Profiles/demoprofile/opacity$'
 }
 
 # --with-storm: a fake HOME with theme files, dconf stub state, and a fake

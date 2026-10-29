@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Press one key combination in the current GNOME session via Mutter RemoteDesktop.
+"""Press key combinations in the current GNOME session via Mutter RemoteDesktop.
 
-Used by tools/screenshots.sh --auto to open and close the Quick Settings menu.
+Used by tools/screenshots.sh --auto (Quick Settings, workspace switches, typing
+`exit` into the demo terminal).
 
-  tools/inject_keys.py ACCEL      e.g. '<Super>s' or Escape
+  tools/inject_keys.py ACCEL...   e.g. '<Super>s', Escape, or e x i t Return
 
-ACCEL is a GTK accelerator: modifiers in <>, then one key. The keys are pressed
-in order and released in reverse. Needs python3-gi.
+Each ACCEL is a GTK accelerator: modifiers in <>, then one key; its keys are
+pressed in order and released in reverse, one ACCEL after the other. Keys are
+sent as keysyms, so Mutter maps them through the active layout. Needs python3-gi.
 Exit status: 0 ok, 1 injection failed, 2 usage.
 """
 
@@ -27,6 +29,8 @@ KEYSYMS = {
     "Up": 0xFF52,
     "Right": 0xFF53,
     "Down": 0xFF54,
+    "Home": 0xFF50,
+    "End": 0xFF57,
     "Shift": 0xFFE1,
     "Control": 0xFFE3,
     "Alt": 0xFFE9,
@@ -66,13 +70,21 @@ def events(accel):
     return [(s, True) for s in syms] + [(s, False) for s in reversed(syms)]
 
 
+def sequence(accels):
+    """events() of several accelerators, one after the other."""
+    out = []
+    for a in accels:
+        out.extend(events(a))
+    return out
+
+
 def call(bus, path, iface, method, params=None):
     r = bus.call_sync(RD, path, iface, method, params, None, Gio.DBusCallFlags.NONE, 5000, None)
     return r.unpack() if r is not None else ()
 
 
-def inject(accel):
-    evs = events(accel)
+def inject(accels):
+    evs = sequence(accels)
     bus = Gio.bus_get_sync(Gio.BusType.SESSION)
     session = call(bus, "/org/gnome/Mutter/RemoteDesktop", RD, "CreateSession")[0]
     pressed = []
@@ -103,16 +115,16 @@ def _on_term(signum, _frame):
 
 def main():
     signal.signal(signal.SIGTERM, _on_term)
-    if len(sys.argv) != 2:
-        print("usage: inject_keys.py ACCEL", file=sys.stderr)
+    if len(sys.argv) < 2:
+        print("usage: inject_keys.py ACCEL...", file=sys.stderr)
         return 2
     try:
-        events(sys.argv[1])
+        sequence(sys.argv[1:])
     except ValueError as exc:
         print(f"inject_keys: {exc}", file=sys.stderr)
         return 2
     try:
-        inject(sys.argv[1])
+        inject(sys.argv[1:])
     except GLib.Error as exc:
         print(f"inject_keys: {exc}", file=sys.stderr)
         return 1

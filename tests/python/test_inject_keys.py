@@ -52,6 +52,16 @@ class AccelTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 self.m.events(bad)
 
+    def test_sequence_types_exit(self):
+        evs = self.m.sequence(["e", "x", "i", "t", "Return"])
+        self.assertEqual(evs[:2], [(ord("e"), True), (ord("e"), False)])
+        self.assertEqual(evs[-2:], [(0xFF0D, True), (0xFF0D, False)])
+        self.assertEqual(len(evs), 10)
+
+    def test_end_home(self):
+        self.assertEqual(self.m.parse_accel("<Super>End"), ["Super", "End"])
+        self.assertEqual(self.m.events("<Super>Home")[1], (0xFF50, True))
+
     def test_sigterm_becomes_systemexit(self):
         # SystemExit unwinds through inject()'s finally (keys released, session stopped)
         with self.assertRaises(SystemExit) as cm:
@@ -64,6 +74,8 @@ class AccelTest(unittest.TestCase):
             sys.argv = ["inject_keys.py"]
             self.assertEqual(self.m.main(), 2)
             sys.argv = ["inject_keys.py", "<Super>"]
+            self.assertEqual(self.m.main(), 2)
+            sys.argv = ["inject_keys.py", "e", "<Super>"]
             self.assertEqual(self.m.main(), 2)
         finally:
             sys.argv = argv
