@@ -140,10 +140,15 @@ _gvlist_edit() {
   esac
 }
 
+# gvlist_add KEY ITEM / gvlist_remove KEY ITEM: add ITEM to / drop it from the
+# string array at KEY (through dset; no-op when nothing changes).
+gvlist_add() { _gvlist_edit add "$1" "$2"; }
+gvlist_remove() { _gvlist_edit remove "$1" "$2"; }
+
 # ext_enable UUID: add UUID to the enabled extensions and drop it from the
 # disabled ones (both through dset, so uninstall restores each list).
 ext_enable() {
   local uuid=${1:?ext_enable: UUID required}
-  _gvlist_edit add /org/gnome/shell/enabled-extensions "$uuid"
-  _gvlist_edit remove /org/gnome/shell/disabled-extensions "$uuid"
+  gvlist_add /org/gnome/shell/enabled-extensions "$uuid"
+  gvlist_remove /org/gnome/shell/disabled-extensions "$uuid"
 }
