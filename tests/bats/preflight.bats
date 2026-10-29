@@ -11,6 +11,10 @@ setup() {
   setup_sandbox
   export NO_COLOR=1 TMPDIR="$BATS_TEST_TMPDIR/tmp"
   mkdir -p "$TMPDIR"
+  # Only the preflight module, so other modules never affect these tests.
+  mkdir -p "$BATS_TEST_TMPDIR/pfmods"
+  ln -s "$TNU_ROOT/modules/00-preflight.sh" "$BATS_TEST_TMPDIR/pfmods/00-preflight.sh"
+  export TNU_MODULES_DIR="$BATS_TEST_TMPDIR/pfmods"
 }
 
 @test "passes on the supported platform" {
