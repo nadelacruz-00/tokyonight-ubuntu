@@ -39,6 +39,11 @@ def call(bus, path, iface, method, params=None):
     return r.unpack() if r is not None else ()
 
 
+def pipeline_description(node_id):
+    """gst-launch description for one frame; the output path is set as a property, never interpolated."""
+    return f"pipewiresrc path={int(node_id)} always-copy=true ! videoconvert ! pngenc snapshot=true ! filesink name=sink"
+
+
 def capture(out):
     Gst.init(None)
     bus = Gio.bus_get_sync(Gio.BusType.SESSION)
@@ -60,10 +65,8 @@ def capture(out):
             time.sleep(0.02)
         if not node:
             raise RuntimeError("Mutter never announced a PipeWire stream")
-        pipe = Gst.parse_launch(
-            f"pipewiresrc path={node[0]} always-copy=true ! videoconvert ! pngenc snapshot=true "
-            f"! filesink location={GLib.shell_quote(out)}"
-        )
+        pipe = Gst.parse_launch(pipeline_description(node[0]))
+        pipe.get_by_name("sink").set_property("location", out)
         pipe.set_state(Gst.State.PLAYING)
         msg = pipe.get_bus().timed_pop_filtered(8 * Gst.SECOND, Gst.MessageType.EOS | Gst.MessageType.ERROR)
         pipe.set_state(Gst.State.NULL)
