@@ -98,6 +98,56 @@ class PiiScanTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn(os.path.join("src", "f.txt") + ":1: email", out)
 
+    def test_denylist_file_itself_skipped(self):
+        for n, name in enumerate((".pii-denylist", "custom.txt")):
+            root = os.path.join(self.tmp, f"r{n}")
+            os.makedirs(root)
+            deny = os.path.join(root, name)
+            with open(deny, "w", encoding="utf-8") as fh:
+                fh.write("secretword\n")
+            with open(os.path.join(root, "ok.txt"), "w", encoding="utf-8") as fh:
+                fh.write("fine\n")
+            self.assertEqual(scan("--denylist", deny, root), (0, ""))
+
+    def test_skips_relative_to_repo_root_for_subdir(self):
+        import subprocess
+
+        root = os.path.join(self.tmp, "g")
+        for sub in ("tests/fixtures/pii", "tests/bats/bats-core", "tests/other"):
+            os.makedirs(os.path.join(root, sub))
+        subprocess.run(["git", "-C", root, "init", "-q"], check=True)
+        for sub in ("tests/fixtures/pii", "tests/bats/bats-core"):
+            shutil.copy(os.path.join(PII, "email.txt"), os.path.join(root, sub, "f.txt"))
+        r = _path.run("pii_scan", "tests", cwd=root)
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        r = _path.run("pii_scan", "tests/fixtures", cwd=root)
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        shutil.copy(os.path.join(PII, "email.txt"), os.path.join(root, "tests", "other", "f.txt"))
+        self.assertEqual(_path.run("pii_scan", "tests", cwd=root).returncode, 1)
+
+    def test_history_removed_dash_lines(self):
+        import subprocess
+
+        def git(*a):
+            subprocess.run(
+                ["git", "-C", self.tmp, "-c", "user.name=T", "-c", "user.email=t@users.noreply.github.com", *a],
+                check=True,
+                capture_output=True,
+            )
+
+        git("init", "-q")
+        p = os.path.join(self.tmp, "a.txt")
+        with open(p, "wb") as fh:
+            fh.write(b"-- mail jane.roe@corp-mail.io\n\xff\xfe bad bytes\n")  # pii-scan: allow
+        git("add", "a.txt")
+        git("commit", "-qm", "add")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("clean\n")
+        git("commit", "-qam", "clean")
+        code, out = scan("--history", self.tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("email", out)
+
     def test_usage(self):
         self.assertEqual(scan()[0], 2)
         self.assertEqual(scan("/nonexistent/path")[0], 2)

@@ -43,7 +43,7 @@ IP_OK_NETS = [
 PRAGMA = "pii-scan: allow"
 
 # Relative-path patterns skipped during directory walks.
-SKIP_GLOBS = [".venv*", ".venv*/*", "*/__pycache__", "__pycache__", ".ruff_cache", ".ruff_cache/*", ".git", ".git/*", "*/.git", "*/.git/*", "tests/bats/bats-*", "tests/fixtures/pii", "tests/fixtures/pii/*"]
+SKIP_GLOBS = [".superpowers", ".superpowers/*", ".venv*", ".venv*/*", "*/__pycache__", "__pycache__", ".ruff_cache", ".ruff_cache/*", ".git", ".git/*", "*/.git", "*/.git/*", "tests/bats/bats-*", "tests/fixtures/pii", "tests/fixtures/pii/*"]
 
 
 def skipped(rel):
@@ -115,36 +115,57 @@ def scan_file(path, denylist, ocr=False):
     return scan_text(data.decode("utf-8", errors="replace"), path, denylist)
 
 
-def walk(root):
-    """Yield files under root, honouring skip rules relative to root."""
+def repo_root(path):
+    """Git toplevel containing path; else cwd when path is under it; else path."""
+    p = os.path.abspath(path)
+    d = p if os.path.isdir(p) else os.path.dirname(p)
+    r = subprocess.run(
+        ["git", "-C", d, "rev-parse", "--show-toplevel"], capture_output=True, text=True, errors="replace", check=False
+    )
+    if r.returncode == 0 and r.stdout.strip():
+        return os.path.realpath(r.stdout.strip())
+    cwd = os.path.realpath(os.getcwd())
+    if os.path.realpath(p).startswith(cwd + os.sep) or os.path.realpath(p) == cwd:
+        return cwd
+    return d
+
+
+def walk(root, base):
+    """Yield files under root; skip rules match paths relative to base."""
     if os.path.isfile(root):
         yield root
         return
     for dirpath, dirnames, filenames in os.walk(root):
-        rel_dir = os.path.relpath(dirpath, root)
-        dirnames[:] = sorted(d for d in dirnames if not skipped(os.path.normpath(os.path.join(rel_dir, d))))
+
+        def rel(name, dirpath=dirpath):
+            return os.path.relpath(os.path.realpath(os.path.join(dirpath, name)), base)
+
+        dirnames[:] = sorted(d for d in dirnames if not skipped(rel(d)))
         for f in sorted(filenames):
-            rel = os.path.normpath(os.path.join(rel_dir, f))
-            if not skipped(rel):
+            if not skipped(rel(f)):
                 yield os.path.join(dirpath, f)
 
 
 def scan_history(root, denylist):
     hits = []
     git = ["git", "-C", root]
-    r = subprocess.run([*git, "log", "--all", "--format=%ae%n%ce"], capture_output=True, text=True, check=False)
+    r = subprocess.run([*git, "log", "--all", "--format=%ae%n%ce"], capture_output=True, text=True, errors="replace", check=False)
     if r.returncode != 0:
         print(f"pii_scan: git log failed in {root}", file=sys.stderr)
         return hits
     hits += scan_text(r.stdout, "history:authors", denylist)
     r = subprocess.run([*git, "log", "-p", "--all", "--format=%H"], capture_output=True, text=True, errors="replace", check=False)
-    cur, skip = "history", False
+    cur, skip, header = "history", False, False
     for n, line in enumerate(r.stdout.splitlines(), 1):
         if line.startswith("diff --git a/"):
             cur = line[len("diff --git a/") :].split(" b/")[0]
-            skip = skipped(cur)
+            skip, header = skipped(cur), True
             continue
-        if skip or line.startswith(("+++", "---")):
+        if header:
+            if line.startswith("@@"):
+                header = False
+            continue
+        if skip:
             continue
         for rule, ex in scan_line(line, cur, denylist):
             hits.append((f"history:{cur}", n, rule, ex))
@@ -174,11 +195,14 @@ def main(argv=None):
         print(f"pii_scan: {exc}", file=sys.stderr)
         return 2
     hits = []
+    deny_real = os.path.realpath(args.denylist) if args.denylist else None
     for p in args.paths:
         if not os.path.exists(p):
             print(f"pii_scan: no such path: {p}", file=sys.stderr)
             return 2
-        for f in walk(p):
+        for f in walk(p, repo_root(p)):
+            if os.path.basename(f) == ".pii-denylist" or os.path.realpath(f) == deny_real:
+                continue
             hits += scan_file(f, denylist, args.ocr)
         if args.history and os.path.isdir(p):
             hits += scan_history(p, denylist)
