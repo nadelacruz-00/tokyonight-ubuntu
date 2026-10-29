@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+# Stub: 'dpkg-query -W [-f=FMT] PKG' (PKG is the last arg). Succeeds, printing 'PKG<TAB>1.0',
+# iff $STUB_STATE/pkgs/PKG exists; else exit 1.
 set -Eeuo pipefail
-printf "%s\t%s\n" "${0##*/}" "$*" >>"${STUB_LOG:-/dev/null}"
-[[ ${1:-} == -W ]] && [[ -e ${STUB_STATE:?}/pkgs/${2:-} ]]
+shopt -s inherit_errexit
+IFS=$'\n\t'
+# Log "NAME<TAB>%q-quoted args" so one spaced arg differs from two args.
+args=""
+if (($#)); then args=$(printf '%q ' "$@"); fi
+printf '%s\t%s\n' "${0##*/}" "${args% }" >>"${STUB_LOG:-/dev/null}"
+pkg=""
+for a in "$@"; do pkg=$a; done
+[[ -n $pkg && -e ${STUB_STATE:?}/pkgs/$pkg ]] || exit 1
+printf '%s\t%s\n' "$pkg" 1.0

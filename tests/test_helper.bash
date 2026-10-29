@@ -87,12 +87,20 @@ refute_stub_called() {
   fi
 }
 
+# One line per entry: "sha256  mode  path" (file), "symlink  path -> target",
+# "dir  mode  path/".
 tree_snapshot() {
   local dir=$1
   (
     cd "$dir" || exit 1
-    find . -type f -print0 | sort -z | while IFS= read -r -d '' f; do
-      printf '%s  %s  %s\n' "$(sha256sum <"$f" | cut -d' ' -f1)" "$(stat -c %a "$f")" "${f#./}"
+    find . -mindepth 1 -print0 | LC_ALL=C sort -z | while IFS= read -r -d '' f; do
+      if [[ -L $f ]]; then
+        printf 'symlink  %s -> %s\n' "${f#./}" "$(readlink "$f")"
+      elif [[ -d $f ]]; then
+        printf 'dir  %s  %s/\n' "$(stat -c %a "$f")" "${f#./}"
+      else
+        printf '%s  %s  %s\n' "$(sha256sum <"$f" | cut -d' ' -f1)" "$(stat -c %a "$f")" "${f#./}"
+      fi
     done
   )
 }

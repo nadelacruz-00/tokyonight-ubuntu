@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
+# Stub: 'flatpak info [--user] APP' succeeds iff $STUB_STATE/flatpak/APP exists;
+# 'flatpak install [flags] [remote] APP' creates it. APP is always the LAST argument.
 set -Eeuo pipefail
-printf "%s\t%s\n" "${0##*/}" "$*" >>"${STUB_LOG:-/dev/null}"
+shopt -s inherit_errexit
+IFS=$'\n\t'
+# Log "NAME<TAB>%q-quoted args" so one spaced arg differs from two args.
+args=""
+if (($#)); then args=$(printf '%q ' "$@"); fi
+printf '%s\t%s\n' "${0##*/}" "${args% }" >>"${STUB_LOG:-/dev/null}"
 app_dir="${STUB_STATE:?}/flatpak"
+app=""
+for a in "$@"; do app=$a; done
 case "${1:-}" in
-  info) [[ -e $app_dir/${2:-} ]] ;;
+  info) [[ -e $app_dir/$app ]] ;;
   install)
-    for a in "${@:2}"; do [[ $a == -* || $a == flathub ]] || {
-      mkdir -p "$app_dir"
-      : >"$app_dir/$a"
-    }; done
+    mkdir -p "$app_dir"
+    : >"$app_dir/$app"
     ;;
 esac

@@ -1,9 +1,23 @@
 #!/usr/bin/env bash
+# Stub: supports 'sudo [-u USER] [-E] [-n] [-H] [-S] [--] CMD...' (execs CMD, env preserved);
+# 'sudo -v' alone exits 0.
 set -Eeuo pipefail
-printf "%s\t%s\n" "${0##*/}" "$*" >>"${STUB_LOG:-/dev/null}"
-while [[ ${1:-} == -* ]]; do
-  if [[ $1 == -- ]]; then break; fi
-  shift
+shopt -s inherit_errexit
+IFS=$'\n\t'
+# Log "NAME<TAB>%q-quoted args" so one spaced arg differs from two args.
+args=""
+if (($#)); then args=$(printf '%q ' "$@"); fi
+printf '%s\t%s\n' "${0##*/}" "${args% }" >>"${STUB_LOG:-/dev/null}"
+while (($#)); do
+  case $1 in
+    -u) shift 2 ;;
+    -v) exit 0 ;;
+    --)
+      shift
+      break
+      ;;
+    -*) shift ;;
+    *) break ;;
+  esac
 done
-[[ ${1:-} == -- ]] && shift
 exec "$@"

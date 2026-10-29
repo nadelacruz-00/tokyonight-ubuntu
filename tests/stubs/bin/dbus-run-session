@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
+# Stub: 'dbus-run-session [opts] -- CMD ARGS...' execs CMD ARGS.
 set -Eeuo pipefail
-printf "%s\t%s\n" "${0##*/}" "$*" >>"${STUB_LOG:-/dev/null}"
-while [[ ${1:-} != -- && $# -gt 0 ]]; do shift; done
+shopt -s inherit_errexit
+IFS=$'\n\t'
+# Log "NAME<TAB>%q-quoted args" so one spaced arg differs from two args.
+args=""
+if (($#)); then args=$(printf '%q ' "$@"); fi
+printf '%s\t%s\n' "${0##*/}" "${args% }" >>"${STUB_LOG:-/dev/null}"
+while (($#)) && [[ $1 != -- ]]; do shift; done
 shift || true
 exec "$@"

@@ -1,37 +1,42 @@
 #!/usr/bin/env bash
+# Stub: 'dconf read KEY' | 'write KEY VALUE' | 'reset [-f] KEY|DIR/' | 'dump DIR/' | 'list DIR/'.
+# State: $STUB_STATE/dconf.tsv (key<TAB>value).
+# shellcheck disable=SC2016 # awk programs are single-quoted on purpose
 set -Eeuo pipefail
-printf "%s\t%s\n" "${0##*/}" "$*" >>"${STUB_LOG:-/dev/null}"
+shopt -s inherit_errexit
+IFS=$'\n\t'
+# Log "NAME<TAB>%q-quoted args" so one spaced arg differs from two args.
+args=""
+if (($#)); then args=$(printf '%q ' "$@"); fi
+printf '%s\t%s\n' "${0##*/}" "${args% }" >>"${STUB_LOG:-/dev/null}"
 db="${STUB_STATE:?}/dconf.tsv"
 touch "$db"
-rewrite() { # rewrite <awk-condition on $1 as k>
+filter() { # filter <awk-args...>: rewrite db through awk
   local tmp
   tmp=$(mktemp)
-  awk -F'\t' -v OFS='\t' "$1" "$db" >"$tmp"
+  awk -F'\t' -v OFS='\t' "$@" "$db" >"$tmp"
   mv "$tmp" "$db"
 }
 case "${1:-}" in
   read) awk -F'\t' -v k="${2:-}" '$1==k{v=$2} END{if(v!="")print v}' "$db" ;;
   write)
-    rewrite "\$1!=\"$2\""
+    filter -v k="$2" '$1!=k'
     printf '%s\t%s\n' "$2" "$3" >>"$db"
     ;;
   reset)
     shift
-    [[ ${1:-} == -f ]] && shift
+    if [[ ${1:-} == -f ]]; then shift; fi
     k=$1
     if [[ $k == */ ]]; then
-      tmp=$(mktemp)
-      awk -F'\t' -v p="$k" 'index($1,p)!=1' "$db" >"$tmp"
-      mv "$tmp" "$db"
+      filter -v p="$k" 'index($1,p)!=1'
     else
-      tmp=$(mktemp)
-      awk -F'\t' -v k="$k" '$1!=k' "$db" >"$tmp"
-      mv "$tmp" "$db"
+      filter -v k="$k" '$1!=k'
     fi
     ;;
   dump)
     dir=${2:-/}
-    sort "$db" | awk -F'\t' -v p="$dir" 'index($1,p)==1{
+    awk -F'\t' -v p="$dir" 'index($1,p)==1{print (index(substr($1,length(p)+1),"/")?1:0) "\t" $0}' "$db" |
+      LC_ALL=C sort | cut -f2- | awk -F'\t' -v p="$dir" 'BEGIN{last="\001"} index($1,p)==1{
       rest=substr($1,length(p)+1); n=index(rest,"/")
       sec=(n? substr(rest,1,n) : "")
       key=(n? substr(rest,n+1) : rest)
@@ -40,8 +45,8 @@ case "${1:-}" in
     ;;
   list)
     dir=${2:-/}
-    awk -F'\t' -v p="$dir" 'index($1,p)==1{
+    awk -F'\t' -v p="$dir" 'BEGIN{last="\001"} index($1,p)==1{
       rest=substr($1,length(p)+1); n=index(rest,"/")
-      print (n? substr(rest,1,n) : rest) }' "$db" | sort -u
+      print (n? substr(rest,1,n) : rest) }' "$db" | LC_ALL=C sort -u
     ;;
 esac

@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
+# Stub: 'curl [flags] [-o|--output FILE] URL'. Copies $STUB_STATE/downloads/<basename URL> to FILE, else exit 22.
+# Value options skipped: --retry N, --retry-delay N, --retry-max-time N, --proto P, --connect-timeout N,
+# --max-time N, -H/--header H, -A/--user-agent A. Bare flags (-fsSL, --tlsv1.2, ...) are ignored.
 set -Eeuo pipefail
-printf "%s\t%s\n" "${0##*/}" "$*" >>"${STUB_LOG:-/dev/null}"
+shopt -s inherit_errexit
+IFS=$'\n\t'
+# Log "NAME<TAB>%q-quoted args" so one spaced arg differs from two args.
+args=""
+if (($#)); then args=$(printf '%q ' "$@"); fi
+printf '%s\t%s\n' "${0##*/}" "${args% }" >>"${STUB_LOG:-/dev/null}"
 out=""
 url=""
 while (($#)); do
   case $1 in
-    -o)
+    -o | --output)
       out=$2
+      shift 2
+      ;;
+    --retry | --retry-delay | --retry-max-time | --proto | --connect-timeout | --max-time | -H | --header | -A | --user-agent)
       shift 2
       ;;
     -*) shift ;;
