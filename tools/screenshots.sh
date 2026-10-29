@@ -189,11 +189,23 @@ capture_manual() {
   [[ -s $dest ]]
 }
 
+# check_test_hook: loudly announce TNU_SHOT_CAPTURE and never let it write into
+# the repo's real docs/screenshots (exit 2).
+check_test_hook() {
+  echo "TEST HOOK ACTIVE: TNU_SHOT_CAPTURE=$TNU_SHOT_CAPTURE" >&2
+  mkdir -p "$SHOT_DIR"
+  if [[ $(cd "$SHOT_DIR" && pwd -P) == "$(cd "$ROOT/docs/screenshots" 2>/dev/null && pwd -P)" ]]; then
+    echo "screenshots: refusing to use TNU_SHOT_CAPTURE with the real docs/screenshots (set SHOT_DIR)" >&2
+    exit 2
+  fi
+}
+
 capture() {
   local dest=$1 shot=$2
   mkdir -p "$SHOT_DIR"
   rm -f -- "$dest"
   if [[ -n ${TNU_SHOT_CAPTURE:-} ]]; then
+    check_test_hook
     # test hook: an executable that writes the PNG to $1
     "$TNU_SHOT_CAPTURE" "$dest" && [[ -s $dest ]]
     return
@@ -303,7 +315,7 @@ shot_overview() {
   elif ((DELAY == 0)); then
     read -r -p 'Open the Activities overview (Super key), then press Enter... ' _ || true
   else
-    echo "Could not open the overview automatically; capturing the current screen." >&2
+    die "could not open the overview (FocusSearch failed); open it yourself with --delay 0 or run without --delay"
   fi
 }
 
@@ -326,7 +338,9 @@ capture_shot() {
     overview) shot_overview ;;
     quick-settings) shot_quick_settings ;;
     osk) shot_osk ;;
-    desktop) ;;
+    desktop)
+      if ((DELAY > 0)); then wait_for_setup 'the desktop is captured (minimise any other windows too)'; fi
+      ;;
   esac
   capture "$dest" "$shot" || die "no screenshot produced for $shot"
   postprocess "$dest"

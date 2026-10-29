@@ -109,3 +109,16 @@ FAKE
   run cat "$READ_LOG"
   assert_output "READ"
 }
+
+@test "--delay 1 desktop: counts down and never reads" {
+  _delay_run --delay 1 desktop
+  [[ -s $SHOT_DIR/desktop-tokyonight.png ]]
+  run cat "$READ_LOG"
+  assert_output "COUNTDOWN 1"
+}
+
+@test "TNU_SHOT_CAPTURE refuses the real docs/screenshots (exit 2) and announces itself" {
+  run -2 env TNU_SHOT_CAPTURE=/bin/true "$TNU_ROOT/tools/screenshots.sh" desktop
+  assert_output --partial "TEST HOOK ACTIVE: TNU_SHOT_CAPTURE=/bin/true"
+  assert_output --partial "refusing"
+}
