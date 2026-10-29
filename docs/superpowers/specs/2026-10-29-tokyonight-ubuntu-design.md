@@ -359,3 +359,11 @@ repo). Topics: `tokyonight`, `gnome`, `ubuntu`, `aarch64`, `rewaita`, `dotfiles`
 - Confirm `ubuntu:26.04` arm64 container image and `ptyxis` /
   `ubuntu-wallpapers-resolute` availability in it.
 - Pin exact Nerd Fonts and oh-my-posh release versions + SHA-256.
+
+## 12. Resolved during planning
+
+See "Planning decisions" in `docs/superpowers/plans/2026-10-29-tokyonight-ubuntu.md`;
+those refine §5–§8 (Ptyxis Storm palette is built in, pinned Nerd Fonts
+v3.5.1 / oh-my-posh v31.8.0, OSK layouts generated per keymap, settings via
+dconf key paths, uninstall replays all backups, drift-aware restore, GDM
+priority 160).
