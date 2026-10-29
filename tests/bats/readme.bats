@@ -50,7 +50,7 @@ _pngs() {
   flags=$(grep -oE '(^|[ ,])--?[a-zA-Z][a-zA-Z-]*' <<<"$output" | tr -d ' ,' | LC_ALL=C sort -u)
   [[ -n $flags ]]
   while IFS= read -r f; do
-    grep -qF -- "\`$f" "$TNU_ROOT/README.md" || grep -qF -- "\`$f\`" "$TNU_ROOT/README.md" || fail "README does not document $f"
+    grep -qE -- "\`([^\`]* )?$f([ ,|\`][^\`]*)?\`" "$TNU_ROOT/README.md" || fail "README does not document $f"
   done <<<"$flags"
 }
 

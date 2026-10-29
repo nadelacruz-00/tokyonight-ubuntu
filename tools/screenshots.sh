@@ -11,6 +11,9 @@
 #   3. manual: the tool says what to capture; the newest PNG from
 #      ~/Pictures/Screenshots (Print Screen) is picked up, or you put the file
 #      at the printed path.
+# Every capture is the WHOLE monitor: before you start, close or minimise other
+# windows and clear notifications (window titles, Wi-Fi names and user names
+# can leak). The tool reminds you before each shot.
 # Afterwards each PNG is shrunk to <= 1.5 MB with ffmpeg when needed, stripped
 # of metadata chunks (helpers/png_strip.py) and scanned with
 # `helpers/pii_scan.py --ocr`. Review every image yourself before committing.
@@ -31,6 +34,7 @@ ALL_SHOTS=(desktop overview quick-settings ptyxis osk)
 VARIANT=tokyonight
 SHOTS=()
 TMP_DEMO=""
+OMP_DIR=""
 
 die() {
   printf 'screenshots: %s\n' "$*" >&2
@@ -181,6 +185,17 @@ postprocess() {
 # --- shot setup -----------------------------------------------------------------
 
 demo_cleanup() {
+  # Close the demo terminal (also when a capture failed): end its shell, found by
+  # its unique ZDOTDIR, and Ptyxis closes the window. Then drop the temp HOME.
+  if [[ -n $TMP_DEMO ]]; then
+    local e p
+    for e in /proc/[0-9]*/environ; do
+      if tr '\0' '\n' <"$e" 2>/dev/null | grep -qxF "ZDOTDIR=$TMP_DEMO/home"; then
+        p=${e%/environ}
+        kill "${p#/proc/}" 2>/dev/null || true
+      fi
+    done
+  fi
   if [[ -n $TMP_DEMO && -d $TMP_DEMO ]]; then rm -rf -- "$TMP_DEMO"; fi
   TMP_DEMO=""
 }
@@ -197,6 +212,7 @@ demo_prepare() {
   omp=$(command -v oh-my-posh || true)
   if [[ -z $omp && -x $HOME/.local/bin/oh-my-posh ]]; then omp=$HOME/.local/bin/oh-my-posh; fi
   [[ -n $omp ]] || die "oh-my-posh not found (run ./install.sh --only prompt first)"
+  OMP_DIR=${omp%/*}
   cp -- "$ROOT/assets/omp/tokyonight_storm.omp.json" "$home/omp.json"
   cat >"$home/.zshrc" <<RC
 eval "\$($omp init zsh --config "$home/omp.json")"
@@ -220,9 +236,10 @@ shot_ptyxis() {
   command -v ptyxis >/dev/null 2>&1 || die "ptyxis is not installed"
   command -v zsh >/dev/null 2>&1 || die "zsh is not installed"
   demo_prepare
-  local home=$TMP_DEMO/home
+  local home=$TMP_DEMO/home demo_path=/usr/local/bin:/usr/bin:/bin
+  demo_path=$demo_path:${OMP_DIR:?}
   ptyxis --new-window -- env -i "HOME=$home" "ZDOTDIR=$home" USER=demo LOGNAME=demo \
-    HOSTNAME=ubuntu "PATH=$PATH" TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8 zsh -d -i &
+    HOSTNAME=ubuntu "PATH=$demo_path" TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8 zsh -d -i &
   sleep 4
 }
 
@@ -246,6 +263,7 @@ shot_osk() {
 
 capture_shot() {
   local shot=$1 dest
+  echo "Close or minimise other windows and clear notifications: the whole monitor is captured."
   dest=$(out_path "$shot" "$VARIANT")
   case $shot in
     ptyxis) shot_ptyxis ;;

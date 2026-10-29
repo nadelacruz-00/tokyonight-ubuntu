@@ -90,12 +90,15 @@ Backups and the install state live in `~/.local/state/tokyonight-ubuntu/`.
 ## Uninstall
 
 ```sh
-./install.sh --uninstall            # every install, newest first
-./install.sh --uninstall --backup TS  # only one backup (see the state directory)
-./install.sh --uninstall --purge    # also the flatpak, fonts and oh-my-posh we installed
+./install.sh --uninstall                  # undo every install, newest first
+./install.sh --uninstall --system         # also undo the root-level changes (asks for sudo)
+./install.sh --uninstall --backup TS      # only backup TS (see the state directory)
+./install.sh --uninstall --purge          # also remove the flatpak, fonts and oh-my-posh we installed
 ```
 
-Files and settings go back to what they were before each run. Packages installed with `--system` (apt) are kept. Undoing root-level changes asks for `sudo` again.
+Files and settings go back to what they were before each run. Root-level changes (the GDM theme, the OSK split-flush hook) are undone only with `--uninstall --system`; without it the uninstall tells you to re-run with `--system` and keeps that backup pending. Packages installed with `--system` (apt) are kept.
+
+`--purge` can be run later: after a plain `--uninstall`, a second `./install.sh --uninstall --purge` removes the flatpak, fonts and oh-my-posh binary we installed. `--purge --backup TS` replays only that backup, so it purges only what that run installed.
 
 ## erhai / OnePlus Pad 3 extras
 
