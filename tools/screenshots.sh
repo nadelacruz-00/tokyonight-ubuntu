@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Maintainer tool: capture the README screenshots in the CURRENT desktop session.
 #
-#   tools/screenshots.sh [--variant tokyonight|storm] SHOT...
+#   tools/screenshots.sh [--variant tokyonight|storm] [--delay N] SHOT...
 #
 # SHOT is one of: desktop overview quick-settings ptyxis osk. Output goes to
 # docs/screenshots/<shot>[-<variant>].png (desktop and ptyxis carry the
@@ -11,6 +11,11 @@
 #   3. manual: the tool says what to capture; the newest PNG from
 #      ~/Pictures/Screenshots (Print Screen) is picked up, or you put the file
 #      at the printed path.
+# Run from a terminal, the terminal itself would be in the picture and pressing
+# Enter there would close menus. With --delay N (seconds) the tool never reads
+# from the terminal: it prints what to do, counts down on stderr (minimise this
+# terminal, open the menu) and then captures. The demo terminal of the ptyxis
+# shot is closed automatically afterwards.
 # Every capture is the WHOLE monitor: before you start, close or minimise other
 # windows and clear notifications (window titles, Wi-Fi names and user names
 # can leak). The tool reminds you before each shot.
@@ -32,6 +37,7 @@ VARIANTS=(tokyonight storm)
 ALL_SHOTS=(desktop overview quick-settings ptyxis osk)
 
 VARIANT=tokyonight
+DELAY=0
 SHOTS=()
 TMP_DEMO=""
 OMP_DIR=""
@@ -43,8 +49,10 @@ die() {
 
 usage() {
   cat <<'USAGE'
-Usage: tools/screenshots.sh [--variant tokyonight|storm] SHOT...
+Usage: tools/screenshots.sh [--variant tokyonight|storm] [--delay N] SHOT...
 
+--delay N   seconds to wait (counting down) before each capture instead of
+            waiting for Enter; lets you minimise this terminal first.
 SHOT: desktop | overview | quick-settings | ptyxis | osk
 Writes docs/screenshots/<shot>[-<variant>].png (the variant suffix applies to
 desktop and ptyxis only). Run it in the session you want pictured, with the
@@ -65,6 +73,7 @@ in_list() {
 # (message on stderr), 3 for --help.
 parse_args() {
   VARIANT=tokyonight
+  DELAY=0
   SHOTS=()
   while (($#)); do
     case $1 in
@@ -78,6 +87,14 @@ parse_args() {
           return 2
         fi
         VARIANT=$2
+        shift 2
+        ;;
+      --delay)
+        if (($# < 2)) || [[ ! $2 =~ ^[0-9]+$ ]]; then
+          echo "--delay needs a whole number of seconds" >&2
+          return 2
+        fi
+        DELAY=$((10#$2))
         shift 2
         ;;
       -h | --help) return 3 ;;
@@ -113,6 +130,27 @@ file_size() {
   stat -c %s -- "$1"
 }
 
+# countdown N MSG: MSG, then a visible countdown on stderr.
+countdown() {
+  local n=$1 msg=$2
+  printf '%s\n' "$msg" >&2
+  while ((n > 0)); do
+    printf '\r  capturing in %2d s ' "$n" >&2
+    sleep 1
+    n=$((n - 1))
+  done
+  printf '\r  capturing now        \n' >&2
+}
+
+# wait_for_setup INSTRUCTION: with --delay a countdown, else wait for Enter.
+wait_for_setup() {
+  if ((DELAY > 0)); then
+    countdown "$DELAY" "Minimise this terminal, then: $1"
+  else
+    read -r -p "$1, then press Enter... " _ || true
+  fi
+}
+
 # --- capture -----------------------------------------------------------------
 
 capture_shell() {
@@ -134,15 +172,20 @@ capture_manual() {
   local dest=$1 shot=$2 stamp newest
   stamp=$(mktemp)
   printf '\nAutomatic capture is not available. Manual capture for "%s":\n' "$shot"
-  printf '  press Print Screen (saves to ~/Pictures/Screenshots) and then Enter here,\n'
-  printf '  or save the image yourself as: %s\n' "$dest"
-  read -r -p 'Press Enter when done... ' _ || true
+  printf '  press Print Screen (saves to ~/Pictures/Screenshots)\n'
+  if ((DELAY > 0)); then
+    countdown "$DELAY" "  press Print Screen within the countdown (or save the image as $dest)"
+  else
+    printf '  and then Enter here, or save the image yourself as: %s\n' "$dest"
+    read -r -p 'Press Enter when done... ' _ || true
+  fi
   if [[ ! -s $dest ]]; then
     newest=$(find "$HOME/Pictures/Screenshots" -maxdepth 1 -name '*.png' -newer "$stamp" 2>/dev/null | LC_ALL=C sort | tail -n 1)
-    # -newer the stamp made before the prompt: only shots taken meanwhile
+    # -newer the stamp made before the wait: only shots taken meanwhile
     if [[ -n $newest ]]; then cp -- "$newest" "$dest"; fi
   fi
   rm -f -- "$stamp"
+  [[ -s $dest ]] || echo "no screenshot found; expected it at $dest" >&2
   [[ -s $dest ]]
 }
 
@@ -150,6 +193,11 @@ capture() {
   local dest=$1 shot=$2
   mkdir -p "$SHOT_DIR"
   rm -f -- "$dest"
+  if [[ -n ${TNU_SHOT_CAPTURE:-} ]]; then
+    # test hook: an executable that writes the PNG to $1
+    "$TNU_SHOT_CAPTURE" "$dest" && [[ -s $dest ]]
+    return
+  fi
   if command -v gdbus >/dev/null 2>&1 && capture_shell "$dest"; then return 0; fi
   rm -f -- "$dest"
   if command -v gst-launch-1.0 >/dev/null 2>&1 && capture_screencast "$dest"; then return 0; fi
@@ -241,24 +289,32 @@ shot_ptyxis() {
   ptyxis --new-window -- env -i "HOME=$home" "ZDOTDIR=$home" USER=demo LOGNAME=demo \
     HOSTNAME=ubuntu "PATH=$demo_path" TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8 zsh -d -i &
   sleep 4
+  if ((DELAY > 0)); then
+    countdown "$DELAY" "The demo terminal is open. Minimise this terminal and leave the demo window in front."
+  fi
 }
 
 shot_overview() {
+  if ((DELAY > 0)); then
+    countdown "$DELAY" "Minimise this terminal; the overview opens by itself."
+  fi
   if busctl --user call org.gnome.Shell /org/gnome/Shell org.gnome.Shell FocusSearch >/dev/null 2>&1; then
     sleep 2
-  else
+  elif ((DELAY == 0)); then
     read -r -p 'Open the Activities overview (Super key), then press Enter... ' _ || true
+  else
+    echo "Could not open the overview automatically; capturing the current screen." >&2
   fi
 }
 
 shot_quick_settings() {
   echo 'Note: Quick Settings can show the Wi-Fi network name and your user name.'
   echo 'They will be reviewed (and the image redone or dropped) before commit.'
-  read -r -p 'Open the Quick Settings menu in the top bar, then press Enter... ' _ || true
+  wait_for_setup 'open the Quick Settings menu in the top bar'
 }
 
 shot_osk() {
-  read -r -p 'Focus a text field, open the on-screen keyboard, then press Enter... ' _ || true
+  wait_for_setup 'focus a text field in another window and open the on-screen keyboard'
 }
 
 capture_shot() {
@@ -276,7 +332,9 @@ capture_shot() {
   postprocess "$dest"
   printf 'saved %s (%s bytes)\n' "${dest#"$ROOT"/}" "$(file_size "$dest")"
   if [[ $shot == ptyxis ]]; then
-    read -r -p 'Close the demo terminal window, then press Enter... ' _ || true
+    if ((DELAY == 0)); then
+      read -r -p 'Close the demo terminal window, then press Enter... ' _ || true
+    fi
     demo_cleanup
   fi
 }

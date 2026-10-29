@@ -66,3 +66,46 @@ sys.exit(1 if bad else 0)' "$TNU_ROOT/assets/omp/tokyonight_storm.omp.json"
   [[ ${SHOTS[0]} == quick-settings ]]
   [[ $(out_path quick-settings storm) == "$TNU_ROOT/docs/screenshots/quick-settings.png" ]]
 }
+
+@test "--delay: valid values parse, invalid ones exit 2" {
+  parse_args --delay 7 desktop
+  [[ $DELAY == 7 ]]
+  parse_args desktop
+  [[ $DELAY == 0 ]]
+  run -2 parse_args --delay abc desktop
+  assert_output --partial "--delay needs"
+  run -2 parse_args --delay -3 desktop
+  run -2 parse_args --delay
+  run -2 "$TNU_ROOT/tools/screenshots.sh" --delay 1.5 desktop
+}
+
+# A fake capture: writes a minimal PNG; `read` is replaced by a recorder.
+_delay_run() {
+  export SHOT_DIR="$BATS_TEST_TMPDIR/shots" READ_LOG="$BATS_TEST_TMPDIR/read.log"
+  : >"$READ_LOG"
+  cat >"$BATS_TEST_TMPDIR/fake-capture" <<'FAKE'
+#!/usr/bin/env bash
+python3 -I -c 'import sys,zlib,struct
+def c(t,b): return struct.pack(">I",len(b))+t+b+struct.pack(">I",zlib.crc32(t+b)&0xffffffff)
+open(sys.argv[1],"wb").write(b"\x89PNG\r\n\x1a\n"+c(b"IHDR",struct.pack(">IIBBBBB",1,1,8,2,0,0,0))+c(b"IDAT",zlib.compress(b"\x00\xff\x00\x00"))+c(b"IEND",b""))' "$1"
+FAKE
+  chmod +x "$BATS_TEST_TMPDIR/fake-capture"
+  export TNU_SHOT_CAPTURE="$BATS_TEST_TMPDIR/fake-capture"
+  read() { echo READ >>"$READ_LOG"; }
+  parse_args "$@"
+  countdown() { echo "COUNTDOWN $1" >>"$READ_LOG"; }
+  capture_shot "${SHOTS[0]}"
+}
+
+@test "--delay > 0: never reads from the terminal, counts down, captures" {
+  _delay_run --delay 3 quick-settings
+  [[ -s $SHOT_DIR/quick-settings.png ]]
+  run cat "$READ_LOG"
+  assert_output "COUNTDOWN 3"
+}
+
+@test "delay 0: waits for Enter" {
+  _delay_run quick-settings
+  run cat "$READ_LOG"
+  assert_output "READ"
+}

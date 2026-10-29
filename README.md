@@ -118,7 +118,7 @@ On an erhai image (detected from its GDM theme or the `oneplus-erhai-desktop` pa
 
 The Rewaita CSS under `assets/rewaita/` is vendored. A maintainer with a desktop that has the Rewaita flatpak regenerates it, and the checksum list, with `tools/regen-assets.sh`; it restores every file Rewaita touches. `assets/SOURCES.md` lists where each file comes from and `assets/checksums.sha256` pins them.
 
-The screenshots above are captured by a maintainer in a live session with `tools/screenshots.sh [--variant tokyonight|storm] desktop|overview|quick-settings|ptyxis|osk`. The terminal shot runs in a sanitised environment, the files are stripped of PNG metadata and scanned for personal data.
+The screenshots above are captured by a maintainer in a live session with `tools/screenshots.sh [--variant tokyonight|storm] [--delay N] desktop|overview|quick-settings|ptyxis|osk`. Run from a terminal, use `--delay`, which counts down instead of waiting for Enter so you can minimise the terminal and open the menu first, e.g. `tools/screenshots.sh --delay 10 quick-settings`. The terminal shot runs in a sanitised environment, the files are stripped of PNG metadata and scanned for personal data.
 
 ## Development & tests
 
