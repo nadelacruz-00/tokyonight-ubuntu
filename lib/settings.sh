@@ -5,7 +5,7 @@
 # Without a session bus, dconf runs under `dbus-run-session` and a one-time
 # warning says a re-login is needed.
 # Sourced, never executed; safe to source twice; sets no shell options.
-# Globals read: DBUS_SESSION_BUS_ADDRESS DRY_RUN RUN_DIR.
+# Globals read: DBUS_SESSION_BUS_ADDRESS DRY_RUN RUN_DIR TNU_ROOT.
 
 : "${_TNU_NOBUS_WARNED:=0}"
 
@@ -124,4 +124,26 @@ gv_str() {
   s=${s//\\/\\\\}
   s=${s//"$q"/\\$q}
   printf '%s%s%s\n' "$q" "$s" "$q"
+}
+
+# _gvlist_edit OP KEY ITEM: dset KEY to its string array with ITEM added or
+# removed (an unset KEY counts as `@as []`). No-op when nothing changes.
+_gvlist_edit() {
+  local op=$1 key=$2 item=$3 cur new rc=0
+  cur=$(dget "$key") || die "cannot read $key"
+  if [[ -z $cur ]]; then cur='@as []'; fi
+  new=$(python3 -I "${TNU_ROOT:?TNU_ROOT not set}/helpers/gvlist.py" "$op" "$cur" "$item") || rc=$?
+  case $rc in
+    0) dset "$key" "$new" ;;
+    3) log_debug "unchanged $key" ;;
+    *) die "cannot parse $key: $cur" ;;
+  esac
+}
+
+# ext_enable UUID: add UUID to the enabled extensions and drop it from the
+# disabled ones (both through dset, so uninstall restores each list).
+ext_enable() {
+  local uuid=${1:?ext_enable: UUID required}
+  _gvlist_edit add /org/gnome/shell/enabled-extensions "$uuid"
+  _gvlist_edit remove /org/gnome/shell/disabled-extensions "$uuid"
 }

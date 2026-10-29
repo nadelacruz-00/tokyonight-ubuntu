@@ -261,11 +261,12 @@ setup() {
   assert_file_not_exists "$d/Tokyonight 🗼.css"
 }
 
-@test "block and line rows warn as unsupported without a handler" {
-  run --separate-stderr libsh 'backup_record block "$HOME/.zshrc" 1
-    backup_record line "$HOME/.config/x" "^theme " ABSENT "theme \"tokyonight\""
+@test "rows without a handler warn as unsupported and stay pending" {
+  run --separate-stderr libsh 'unset -f _replay_block _replay_line
+    backup_record block "$HOME/.zshrc" 1
+    backup_record line "$HOME/.config/x" "^theme " ABSENT "theme \"tokyonight\"" ""
     backup_replay "$BACKUP"'
-  # Pending until lib/edit.sh provides the handlers: not reported as done.
+  # Not reported as done.
   assert_failure
   [[ $stderr == *"unsupported row type"* ]]
   assert_file_not_exists "$BACKUP/replayed"

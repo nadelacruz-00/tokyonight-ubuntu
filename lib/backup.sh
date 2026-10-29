@@ -12,7 +12,8 @@
 #   pkg     flatpak|fontdir|bin|sysdir  NAME_OR_PATH   (replayed only with PURGE=1)
 #   alt     NAME  PATH                            (update-alternatives --remove)
 #   block   FILE  CREATED(0|1)                    (handler lives in lib/edit.sh)
-#   line    FILE  MATCH_REGEX  OLD_LINE|ABSENT  NEW_LINE   (handler lives in lib/edit.sh)
+#   line    FILE  MATCH_REGEX  OLD_LINE|ABSENT  NEW_LINE  SECTION   (handler in lib/edit.sh;
+#           the last four fields are escaped with _tnu_esc; SECTION empty = none)
 #
 # Row TYPE is replayed by the function `_replay_TYPE DIR PURGE FIELD...`
 # (DIR = backup dir, FIELD... = the row's fields after TYPE). Handlers may be
@@ -154,7 +155,7 @@ _backup_row_arity() {
     file | sysfile | dconf) echo 3 ;;
     dir) echo 1 ;;
     pkg | alt | block) echo 2 ;;
-    line) echo 4 ;;
+    line) echo 5 ;;
     *) echo any ;;
   esac
 }

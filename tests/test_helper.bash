@@ -13,7 +13,7 @@ load_libs
 
 SYSBIN_TOOLS=(bash env cat cp mv rm mkdir ln ls chmod stat touch mktemp date sleep
   sort uniq head tail tr cut wc grep sed awk find xargs cmp diff sha256sum tar xz
-  python3 flock install readlink dirname basename id printf tee kill timeout sync rmdir)
+  python3 flock install readlink dirname basename id printf tee kill timeout sync rmdir df)
 
 DEFAULT_STUBS=(dconf curl fc-cache uname dpkg-query)
 
