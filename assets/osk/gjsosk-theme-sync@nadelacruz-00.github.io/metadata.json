@@ -1,0 +1,7 @@
+{
+  "uuid": "gjsosk-theme-sync@nadelacruz-00.github.io",
+  "name": "GJS OSK Theme Sync",
+  "description": "Colours the GJS OSK keyboard from the Rewaita (GTK 4) palette in dark mode.",
+  "shell-version": ["45", "46", "47", "48", "49", "50", "51"],
+  "url": "https://github.com/nadelacruz-00"
+}

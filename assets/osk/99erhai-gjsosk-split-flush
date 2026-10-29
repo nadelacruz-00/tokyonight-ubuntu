@@ -1,0 +1,7 @@
+// erhai: keep the GJS OSK split-keyboard halves flush with both screen edges.
+//
+// oneplus-erhai-desktop upgrades replace gjsosk's extension.js, which drops
+// the one-line spacer fix.  This re-applies it after every dpkg run; the
+// helper is a no-op while the fix is in place and only warns if upstream
+// changes that line.  Remove with 'sudo gjsosk-split-flush uninstall'.
+DPkg::Post-Invoke { "[ ! -x /usr/local/sbin/gjsosk-split-flush ] || /usr/local/sbin/gjsosk-split-flush reapply || true"; };
