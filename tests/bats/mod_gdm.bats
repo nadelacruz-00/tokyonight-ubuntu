@@ -126,6 +126,22 @@ EOS
   refute_stub_called update-alternatives
 }
 
+@test "dry-run previews when the wallpaper is not installed yet" {
+  rm "$SYS_ROOT/usr/share/backgrounds/osselo-Ask_a_friend.jpg"
+  run_install -y --system --only gdm --dry-run
+  assert_success
+  assert_output --regexp 'gdm +CHANGED'
+  refute_stub_called update-alternatives
+}
+
+@test "dry-run previews when the build tools are not installed yet" {
+  rm "$BATS_TEST_TMPDIR/bin/gresource"
+  run_install -y --system --only gdm --dry-run
+  assert_success
+  assert_output --regexp 'gdm +CHANGED'
+  refute_stub_called gresource
+}
+
 @test "uninstall removes alternative and file" {
   snap="$BATS_TEST_TMPDIR/snap"
   tree_snapshot "$SYS_ROOT" >"$snap"

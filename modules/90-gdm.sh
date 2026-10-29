@@ -41,6 +41,8 @@ _gdm_tools() {
 }
 
 # _gdm_alt_registered: our file is already an alternative of gdm-theme.gresource.
+# Format assumption: /var/lib/dpkg/alternatives/<name> lists one alternative
+# path per line (alongside the mode, link and priority lines).
 _gdm_alt_registered() {
   local f
   f=$(sys_path /var/lib/dpkg/alternatives/$_GDM_ALT_NAME)
@@ -59,17 +61,24 @@ gdm_apply() {
   base=$(_gdm_base) || die "no base GDM theme (looked for erhai and Yaru gnome-shell-theme.gresource)"
   wall=$(sys_path "$_GDM_WALLPAPER")
   if [[ ! -f $wall ]]; then
+    if _dry; then
+      # The wallpaper module only notes its apt install in a dry run.
+      note_change "build GDM theme (wallpaper pending install)"
+      return 0
+    fi
     die "wallpaper $_GDM_WALLPAPER is missing (the wallpaper module installs it under --system and runs earlier)"
   fi
   pal=$TNU_ROOT/assets/rewaita/${VARIANT:-tokyonight}/gtk4.css
   if ! _gdm_tools; then
     if _dry; then
-      note_change "install libglib2.0-dev-bin"
+      note_change "build GDM theme (tools pending install)"
       return 0
     fi
     die "glib-compile-resources/gresource not available (apt package libglib2.0-dev-bin)"
   fi
 
+  # Scratch build in our own RUN_DIR (not the user's or the system's files):
+  # it needs no backup row and is harmless in dry-run, so it bypasses lib primitives.
   mkdir -p -- "$RUN_DIR/gdm"
   out=$RUN_DIR/gdm/gnome-shell-theme.gresource
   python3 -I "$TNU_ROOT/helpers/gresource.py" build \
