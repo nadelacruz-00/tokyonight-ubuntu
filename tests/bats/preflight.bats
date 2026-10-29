@@ -11,10 +11,14 @@ setup() {
   setup_sandbox
   export NO_COLOR=1 TMPDIR="$BATS_TEST_TMPDIR/tmp"
   mkdir -p "$TMPDIR"
+  # Only the preflight module, so other modules never affect these tests.
+  mkdir -p "$BATS_TEST_TMPDIR/pfmods"
+  ln -s "$TNU_ROOT/modules/00-preflight.sh" "$BATS_TEST_TMPDIR/pfmods/00-preflight.sh"
+  export TNU_MODULES_DIR="$BATS_TEST_TMPDIR/pfmods"
 }
 
 @test "passes on the supported platform" {
-  run_install -y --skip fonts,prompt
+  run_install -y
   assert_success
   assert_line --regexp '^preflight +OK$'
 }
@@ -44,7 +48,7 @@ setup() {
 
 @test "--force allows 24.04 with warning" {
   printf 'ID=ubuntu\nVERSION_ID="24.04"\n' >"$SYS_ROOT/etc/os-release"
-  STUB_UNAME_M=x86_64 run_install -y --force --skip fonts,prompt
+  STUB_UNAME_M=x86_64 run_install -y --force
   assert_success
   assert_output --partial "warning: preflight: unsupported OS: ubuntu 24.04"
   assert_output --partial "warning: preflight: unsupported architecture"
@@ -79,7 +83,7 @@ setup() {
   mkdir -p "$SYS_ROOT/usr/bin"
   printf '#!/bin/sh\n' >"$SYS_ROOT/usr/bin/gnome-shell"
   chmod +x "$SYS_ROOT/usr/bin/gnome-shell"
-  XDG_CURRENT_DESKTOP="" run_install -y --skip fonts,prompt
+  XDG_CURRENT_DESKTOP="" run_install -y
   assert_success
 }
 

@@ -29,8 +29,8 @@ fonts_apply() {
     die "cannot unpack JetBrainsMono.tar.xz"
   fi
   before=$(module_changes "$MODULE")
-  if ((! existed)); then backup_record pkg fontdir "$dest"; fi
   while IFS= read -r -d '' f; do
+    if ((! existed)) && [[ ! -d $dest ]]; then backup_record pkg fontdir "$dest"; fi
     install_file "$f" "$dest/${f##*/}" 0644
   done < <(find "$tmp" -type f -name '*.ttf' -print0 | LC_ALL=C sort -z)
   rm -rf -- "$tmp"

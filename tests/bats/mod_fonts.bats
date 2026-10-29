@@ -78,6 +78,7 @@ manifest() {
   assert_success
   assert_dir_not_exists "$DEST"
   refute_stub_called curl
+  assert_line --regexp '^fonts +CHANGED +1'
 }
 
 @test "fonts uninstall --purge removes dir only when we created it" {
