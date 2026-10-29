@@ -165,3 +165,35 @@ print(json.loads(items[10 - o.NUM_BUILTIN])[-1]["name"], json.loads(items[11 - o
   assert_file_not_exists "$SYS_ROOT/etc/apt/apt.conf.d/99erhai-gjsosk-split-flush"
   assert_dir_not_exists "$EXT"
 }
+
+@test "split-flush patch of extension.js is backed up and restored by uninstall --system" {
+  local js="$SYS_ROOT/usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/extension.js"
+  local old='                width: this.box.width * (1 - this.widthPercent) - 10 + this.settings.get_int("border-spacing-px")'
+  printf 'a\n%s\nb\n' "$old" >"$js"
+  cp "$js" "$BATS_TEST_TMPDIR/orig.js"
+  make_erhai
+  run_install -y --only osk --system
+  assert_success
+  run grep -cF '// [erhai] halves flush with both screen edges' "$js"
+  assert_output 1
+  run grep -F "sysfile"$'\t'"$js"$'\t' "$STATE"/backups/*/manifest.tsv
+  assert_success
+  # re-run: already patched, no new row
+  run_install -y --only osk --system
+  assert_success
+  run grep -cF "sysfile"$'\t'"$js"$'\t' "$STATE"/backups/*/manifest.tsv
+  assert_output 1
+  run_install -y --uninstall --system
+  assert_success
+  cmp "$js" "$BATS_TEST_TMPDIR/orig.js"
+}
+
+@test "an already patched extension.js gets no backup row" {
+  local js="$SYS_ROOT/usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/extension.js"
+  printf 'x // [erhai] halves flush with both screen edges\n' >"$js"
+  make_erhai
+  run_install -y --only osk --system
+  assert_success
+  run grep -F "$js" "$STATE"/backups/*/manifest.tsv
+  assert_failure
+}

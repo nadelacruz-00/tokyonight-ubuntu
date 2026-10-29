@@ -158,3 +158,17 @@ setup() {
   run cat "$HOME/.config/lig/config.toml"
   assert_output --partial 'theme = "dark"'
 }
+
+@test "prompt plain uninstall keeps the oh-my-posh binary, --purge removes it" {
+  run_install -y --only prompt
+  assert_success
+  assert_file_executable "$OMP_BIN"
+  run_install -y --uninstall
+  assert_success
+  assert_file_executable "$OMP_BIN"
+  assert_output --partial "kept bin $OMP_BIN (uninstall with --purge to remove it)"
+  assert_file_not_exists "$HOME/.config/oh-my-posh/tokyonight_storm.omp.json"
+  run_install -y --uninstall --purge
+  assert_success
+  assert_file_not_exists "$OMP_BIN"
+}

@@ -29,6 +29,7 @@ setup() {
   assert_success
   assert_stub_called sudo
   assert_stub_called apt-get 'install -y gnome-shell-extensions'
+  assert_stub_called apt-get 'update$'
   assert_file_exists "$HOME/.local/share/themes/rewaita/gnome-shell/gnome-shell.css"
 }
 

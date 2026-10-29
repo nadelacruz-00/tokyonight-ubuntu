@@ -31,6 +31,7 @@ pref() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1], encod
   # The stub is absent for the whole run, so later flatpak calls cannot succeed.
   assert_stub_called sudo
   assert_stub_called apt-get 'install -y flatpak'
+  assert_stub_called apt-get 'update$'
 }
 
 @test "rewaita skipped offline" {
@@ -121,4 +122,11 @@ pref() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1], encod
   assert_success
   assert_tree_unchanged "$snap" "$HOME"
   refute_stub_called flatpak '^install'
+}
+
+@test "the pkg flatpak row is written before the install (a failed install stays purgeable)" {
+  STUB_FLATPAK_INSTALL_FAIL=1 run_install -y --only rewaita
+  assert_failure 1
+  run grep -F $'pkg\tflatpak\t'"$APP" "$XDG_STATE_HOME"/tokyonight-ubuntu/backups/*/manifest.tsv
+  assert_success
 }

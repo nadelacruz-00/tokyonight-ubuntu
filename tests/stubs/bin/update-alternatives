@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Stub: logs the call and exits 0.
+# Stub: logs the call and exits 0. '--query NAME' prints $STUB_STATE/ua-query.NAME
+# when it exists (else nothing), so a test can play a manual pin.
 set -Eeuo pipefail
 shopt -s inherit_errexit
 IFS=$'\n\t'
@@ -7,3 +8,6 @@ IFS=$'\n\t'
 args=""
 if (($#)); then args=$(printf '%q ' "$@"); fi
 printf '%s\t%s\n' "${0##*/}" "${args% }" >>"${STUB_LOG:-/dev/null}"
+if [[ ${1:-} == --query && -f ${STUB_STATE:?}/ua-query.${2:-} ]]; then
+  cat -- "$STUB_STATE/ua-query.$2"
+fi

@@ -18,7 +18,7 @@ wallpaper_applies() {
 wallpaper_apply() {
   local uri
   if [[ ! -e $(sys_path "$_WALL") ]]; then
-    as_root apt-get install -y ubuntu-wallpapers-resolute
+    apt_install ubuntu-wallpapers-resolute
     note_change "apt-get install ubuntu-wallpapers-resolute"
   fi
   uri=$(gv_str "file://$_WALL")

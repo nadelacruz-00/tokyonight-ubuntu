@@ -17,7 +17,7 @@ shell_theme_applies() {
 
 shell_theme_apply() {
   if [[ ${HAS_USER_THEME:-0} != 1 ]]; then
-    as_root apt-get install -y gnome-shell-extensions
+    apt_install gnome-shell-extensions
     note_change "apt-get install gnome-shell-extensions"
   fi
   install_file "$TNU_ROOT/assets/rewaita/$VARIANT/gnome-shell.css" \

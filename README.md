@@ -23,7 +23,7 @@ The GDM login screen (a `--system` change) is not pictured: it cannot be capture
 
 ## Requirements
 
-- Ubuntu 26.04, aarch64, GNOME on a running session (Wayland or X11). Other systems are refused unless you pass `--force`.
+- Ubuntu 26.04, aarch64, GNOME 50 on a running Wayland session. Other systems are refused unless you pass `--force`.
 - Never run as root. The root-level parts ask for `sudo` only with `--system`.
 - Required tools: `dconf`, `sha256sum`, `install`, `flock`, `python3`, `curl`, and a session D-Bus (or `dbus-run-session`).
 - Optional, per module: `flatpak` (Rewaita), the `user-theme` shell extension, the Ubuntu 26.04 wallpapers package, Ptyxis, zsh or bash, and the GJS OSK extension. A module whose prerequisite is missing is skipped with a hint; `--system` installs the apt-installable ones.
@@ -96,9 +96,9 @@ Backups and the install state live in `~/.local/state/tokyonight-ubuntu/`.
 ./install.sh --uninstall --purge          # also remove the flatpak, fonts and oh-my-posh we installed
 ```
 
-Files and settings go back to what they were before each run. Root-level changes (the GDM theme, the OSK split-flush hook) are undone only with `--uninstall --system`; without it the uninstall tells you to re-run with `--system` and keeps that backup pending. Packages installed with `--system` (apt) are kept.
+Files and settings go back to what they were before each run. Root-level changes (the GDM theme, the OSK split-flush hook) are undone only with `--uninstall --system`; without it the uninstall tells you to re-run with `--system` and keeps that backup pending. Packages installed with `--system` (apt) are kept, and so is the user-level `flathub` flatpak remote the Rewaita module adds (also with `--purge`; `flatpak remote-delete --user flathub` removes it).
 
-`--purge` can be run later: after a plain `--uninstall`, a second `./install.sh --uninstall --purge` removes the flatpak, fonts and oh-my-posh binary we installed. `--purge --backup TS` replays only that backup, so it purges only what that run installed.
+A plain `--uninstall` keeps the flatpak, the fonts and the oh-my-posh binary we installed. `--purge` can be run later: after a plain `--uninstall`, a second `./install.sh --uninstall --purge` removes the flatpak, fonts and oh-my-posh binary we installed. `--purge --backup TS` replays only that backup, so it purges only what that run installed.
 
 ## erhai / OnePlus Pad 3 extras
 

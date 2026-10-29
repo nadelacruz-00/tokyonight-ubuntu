@@ -3,6 +3,7 @@
 # 'flatpak install [flags] [remote] APP' creates it. APP is always the LAST argument
 # there. 'flatpak run APP ARGS...' runs $STUB_STATE/flatpak-run (if present) with
 # APP ARGS..., so a test can play the app's side effects.
+# STUB_FLATPAK_INSTALL_FAIL=1 makes 'flatpak install' fail without installing.
 set -Eeuo pipefail
 shopt -s inherit_errexit
 IFS=$'\n\t'
@@ -20,6 +21,7 @@ case "${1:-}" in
     ;;
   info) [[ -e $app_dir/$app ]] ;;
   install)
+    if [[ -n ${STUB_FLATPAK_INSTALL_FAIL:-} ]]; then exit 1; fi
     mkdir -p "$app_dir"
     : >"$app_dir/$app"
     ;;

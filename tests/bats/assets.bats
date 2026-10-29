@@ -93,3 +93,12 @@ setup() {
   assert_success
   refute_output --partial FAIL
 }
+
+@test "the vendored oh-my-posh theme ships its MIT notice, referenced from SOURCES and CREDITS" {
+  local lic="$TNU_ROOT/LICENSES/oh-my-posh-MIT.txt"
+  assert_file_exists "$lic"
+  grep -q '^Copyright 2022 Jan De Dobbeleer$' "$lic"
+  grep -q '^Permission is hereby granted, free of charge' "$lic"
+  grep -q 'LICENSES/oh-my-posh-MIT.txt' "$A/SOURCES.md"
+  grep -q 'LICENSES/oh-my-posh-MIT.txt' "$TNU_ROOT/CREDITS.md"
+}

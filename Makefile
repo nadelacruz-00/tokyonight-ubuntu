@@ -12,7 +12,7 @@ IMAGE := tokyonight-ubuntu-test
 
 dev-deps:
 	python3 -m venv $(VENV)
-	$(BIN)/pip install -q shellcheck-py shfmt-py ruff
+	$(BIN)/pip install -q shellcheck-py==0.11.0.1 shfmt-py==4.2.0 ruff==0.17.3 # version, not an address: pii-scan: allow
 
 lint:
 	@if [ -n "$(SH_PATHS)" ]; then \

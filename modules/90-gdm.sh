@@ -36,7 +36,7 @@ _gdm_base() {
 # _gdm_tools: glib-compile-resources and gresource available (installing them if not).
 _gdm_tools() {
   have_cmd glib-compile-resources && have_cmd gresource && return 0
-  as_root apt-get install -y libglib2.0-dev-bin
+  apt_install libglib2.0-dev-bin
   have_cmd glib-compile-resources && have_cmd gresource
 }
 
@@ -54,6 +54,24 @@ _gdm_register_alt() {
   backup_record alt "$_GDM_ALT_NAME" "$_GDM_DEST"
   as_root update-alternatives --install "$_GDM_ALT_LINK" "$_GDM_ALT_NAME" "$_GDM_DEST" 160
   note_change "alternative $_GDM_ALT_NAME -> $_GDM_DEST"
+  _gdm_check_pin
+}
+
+# _gdm_check_pin: warn when the alternative is set manually to another file,
+# because then priority 160 does not select ours.
+_gdm_check_pin() {
+  local out line status="" value=""
+  if _dry || ! have_cmd update-alternatives; then return 0; fi
+  out=$(update-alternatives --query "$_GDM_ALT_NAME" 2>/dev/null) || return 0
+  while IFS= read -r line; do
+    case $line in
+      'Status: '*) status=${line#Status: } ;;
+      'Value: '*) value=${line#Value: } ;;
+    esac
+  done <<<"$out"
+  if [[ $status == manual && $value != "$_GDM_DEST" ]]; then
+    log_warn "$_GDM_ALT_NAME is pinned manually to ${value:-none}, so GDM keeps that theme; run: sudo update-alternatives --auto $_GDM_ALT_NAME"
+  fi
 }
 
 gdm_apply() {
