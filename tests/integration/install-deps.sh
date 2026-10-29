@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 # Packages for tests/integration/run.sh in an Ubuntu 26.04 container (as root),
-# shared by the Containerfile and the CI integration jobs.
+# shared by the Containerfile and the CI integration jobs. All are required:
+# run.sh --system fails without the wallpaper and the Yaru GDM base theme.
 #   install-deps.sh [USER]   also create USER with passwordless sudo
-# Optional packages that the archive may not carry are skipped with a message;
-# run.sh then skips the assertions that need them.
 set -Eeuo pipefail
 shopt -s inherit_errexit
 IFS=$'\n\t'
 
-REQUIRED=(dconf-cli dbus libglib2.0-bin libglib2.0-dev-bin gsettings-desktop-schemas
-  python3 curl ca-certificates xz-utils zsh gnome-shell-extensions gnome-shell-common
-  fontconfig sudo git)
-OPTIONAL=(ptyxis yaru-theme-gnome-shell ubuntu-wallpapers-resolute)
+PACKAGES=(dconf-cli dbus libglib2.0-bin libglib2.0-dev-bin gsettings-desktop-schemas
+  python3 curl ca-certificates xz-utils zsh ptyxis gnome-shell-extensions gnome-shell-common
+  yaru-theme-gnome-shell ubuntu-wallpapers-resolute fontconfig sudo git)
 
 if [[ $EUID != 0 ]]; then
   echo "install-deps.sh: run as root (inside the container)" >&2
@@ -19,16 +17,7 @@ if [[ $EUID != 0 ]]; then
 fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends "${REQUIRED[@]}"
-skipped=()
-for p in "${OPTIONAL[@]}"; do
-  if ! apt-get install -y --no-install-recommends "$p"; then skipped+=("$p"); fi
-done
-if ((${#skipped[@]})); then
-  echo "install-deps.sh: skipped optional packages (not available): ${skipped[*]}"
-else
-  echo "install-deps.sh: all optional packages installed"
-fi
+apt-get install -y --no-install-recommends "${PACKAGES[@]}"
 rm -rf /var/lib/apt/lists/*
 
 if (($#)); then

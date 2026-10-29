@@ -1,6 +1,7 @@
 import os
 import shutil
 import struct
+import subprocess
 import tempfile
 import unittest
 import zlib
@@ -33,6 +34,14 @@ class PiiScanTest(unittest.TestCase):
         self._td = tempfile.TemporaryDirectory()
         self.addCleanup(self._td.cleanup)
         self.tmp = self._td.name
+
+    def git(self, *a):
+        """git in self.tmp with a throwaway identity."""
+        subprocess.run(
+            ["git", "-C", self.tmp, "-c", "user.name=T", "-c", "user.email=t@users.noreply.github.com", *a],
+            check=True,
+            capture_output=True,
+        )
 
     def test_planted_positives(self):
         deny = os.path.join(self.tmp, "deny")
@@ -110,7 +119,6 @@ class PiiScanTest(unittest.TestCase):
             self.assertEqual(scan("--denylist", deny, root), (0, ""))
 
     def test_skips_relative_to_repo_root_for_subdir(self):
-        import subprocess
 
         root = os.path.join(self.tmp, "g")
         for sub in ("tests/fixtures/pii", "tests/bats/bats-core", "tests/other"):
@@ -126,24 +134,16 @@ class PiiScanTest(unittest.TestCase):
         self.assertEqual(_path.run("pii_scan", "tests", cwd=root).returncode, 1)
 
     def test_history_removed_dash_lines(self):
-        import subprocess
 
-        def git(*a):
-            subprocess.run(
-                ["git", "-C", self.tmp, "-c", "user.name=T", "-c", "user.email=t@users.noreply.github.com", *a],
-                check=True,
-                capture_output=True,
-            )
-
-        git("init", "-q")
+        self.git("init", "-q")
         p = os.path.join(self.tmp, "a.txt")
         with open(p, "wb") as fh:
             fh.write(b"-- mail jane.roe@corp-mail.io\n\xff\xfe bad bytes\n")  # pii-scan: allow
-        git("add", "a.txt")
-        git("commit", "-qm", "add")
+        self.git("add", "a.txt")
+        self.git("commit", "-qm", "add")
         with open(p, "w", encoding="utf-8") as fh:
             fh.write("clean\n")
-        git("commit", "-qam", "clean")
+        self.git("commit", "-qam", "clean")
         code, out = scan("--history", self.tmp)
         self.assertEqual(code, 1)
         self.assertIn("email", out)
@@ -151,28 +151,36 @@ class PiiScanTest(unittest.TestCase):
     def test_history_diff_marker_is_not_a_local_part(self):
         if shutil.which("git") is None:
             self.skipTest("git missing")
-        import subprocess
 
-        def git(*a):
-            subprocess.run(
-                ["git", "-C", self.tmp, "-c", "user.name=T", "-c", "user.email=t@users.noreply.github.com", *a],
-                check=True,
-                capture_output=True,
-            )
-
-        git("init", "-q")
+        self.git("init", "-q")
         p = os.path.join(self.tmp, "t.py")
         with open(p, "w", encoding="utf-8") as fh:
             fh.write("@unittest.skipUnless(True, 'x')\ndef f():\n    pass\n")
-        git("add", "t.py")
-        git("commit", "-qm", "add")
+        self.git("add", "t.py")
+        self.git("commit", "-qm", "add")
         os.remove(p)
-        git("commit", "-qam", "rm")
+        self.git("commit", "-qam", "rm")
         # in `git log -p` the +/- diff marker before a decorator is not a mail local part
         self.assertEqual(scan("--history", self.tmp), (0, ""))
 
+    def test_history_diff_line_with_a_real_address_is_flagged(self):
+        if shutil.which("git") is None:
+            self.skipTest("git missing")
+        self.git("init", "-q")
+        p = os.path.join(self.tmp, "t.py")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("@x jane.roe@corp-mail.io\n")  # pii-scan: allow
+        self.git("add", "t.py")
+        self.git("commit", "-qm", "add")
+        os.remove(p)
+        self.git("commit", "-qam", "rm")
+        # dropping the diff marker still leaves the address itself
+        code, out = scan("--history", self.tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("history:t.py:", out)
+        self.assertIn("email: jane.roe@corp-mail.io", out)  # pii-scan: allow
+
     def test_no_git_on_path(self):
-        import subprocess
         import sys
 
         d = os.path.join(self.tmp, "a")
@@ -196,22 +204,14 @@ class PiiScanTest(unittest.TestCase):
     def test_history(self):
         if shutil.which("git") is None:
             self.skipTest("git missing")
-        import subprocess
 
-        def git(*a):
-            subprocess.run(
-                ["git", "-C", self.tmp, "-c", "user.name=T", "-c", "user.email=t@users.noreply.github.com", *a],
-                check=True,
-                capture_output=True,
-            )
-
-        git("init", "-q")
+        self.git("init", "-q")
         shutil.copy(os.path.join(PII, "email.txt"), os.path.join(self.tmp, "a.txt"))
-        git("add", "a.txt")
-        git("commit", "-qm", "add")
+        self.git("add", "a.txt")
+        self.git("commit", "-qm", "add")
         os.remove(os.path.join(self.tmp, "a.txt"))
-        git("add", "-A")
-        git("commit", "-qm", "rm")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "rm")
         self.assertEqual(scan(self.tmp)[0], 0)  # gone from the tree
         code, out = scan("--history", self.tmp)
         self.assertEqual(code, 1)

@@ -11,7 +11,7 @@ jobs:
   lint:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 0
@@ -21,7 +21,7 @@ jobs:
   pii:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 0
@@ -30,21 +30,34 @@ jobs:
 
   unit:
     runs-on: ubuntu-24.04-arm
+    container: ubuntu:26.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
-      - uses: actions/checkout@v4
+      # git before checkout, or it falls back to a tarball without submodules
+      - run: >-
+          apt-get update && apt-get install -y --no-install-recommends
+          git ca-certificates make python3 python3-venv gjs xz-utils diffutils
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 0
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gjs
-      - run: make test-py test-bats test-gjs
+      # As a non-root user: install.sh refuses root, and root bypasses file modes.
+      - run: |
+          useradd -m tester
+          chown -R tester: "$GITHUB_WORKSPACE"
+      - run: runuser -u tester -- env HOME=/home/tester make dev-deps
+      - run: runuser -u tester -- env HOME=/home/tester make lint test-py test-bats test-gjs
 
   integration:
     runs-on: ubuntu-24.04-arm
     container: ubuntu:26.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
       # checkout needs git in the container, or it falls back to a tarball without submodules
       - run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 0
@@ -57,10 +70,12 @@ jobs:
   network:
     runs-on: ubuntu-24.04-arm
     container: ubuntu:26.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
     continue-on-error: true
     steps:
       - run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 0

@@ -63,8 +63,16 @@ while (($#)); do
   esac
   shift
 done
-if ((SYSTEM)) && [[ ${TNU_IN_CONTAINER:-} != 1 ]]; then
-  refuse "--system changes the real system: it only runs in a container (TNU_IN_CONTAINER=1)"
+# in_container: a container runtime marker is present (docker, podman, systemd's view).
+in_container() {
+  [[ -e /.dockerenv || -e /run/.containerenv ]] && return 0
+  command -v systemd-detect-virt >/dev/null 2>&1 && systemd-detect-virt -q -c
+}
+if ((SYSTEM)); then
+  if [[ ${TNU_IN_CONTAINER:-} != 1 ]]; then
+    refuse "--system changes the real system: it only runs in a container (TNU_IN_CONTAINER=1)"
+  fi
+  in_container || refuse "--system: TNU_IN_CONTAINER=1 is set, but this is not a container"
 fi
 if [[ ${TNU_REAL_REWAITA:-0} == 1 ]] && ((! NET)); then refuse "TNU_REAL_REWAITA=1 needs --real-network"; fi
 if [[ $EUID == 0 ]]; then refuse "run as a non-root user (install.sh refuses root)"; fi
@@ -93,21 +101,25 @@ check_home() {
 
 # ---------------------------------------------------------------- outer stage
 outer() {
-  local c real_home="" pw_home="" tmp token rc=0
+  local c real_home="" pw_home="" tmp token rc=0 bus_sha=""
   for c in dconf dbus-run-session gsettings; do
     command -v "$c" >/dev/null 2>&1 || refuse "needs $c (real, not a stub)"
   done
   if [[ -n ${HOME:-} ]]; then real_home=$(_resolve "$HOME" || true); fi
   pw_home=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6 || true)
   if [[ -n $pw_home ]]; then pw_home=$(_resolve "$pw_home" || printf '%s' "$pw_home"); fi
-  # Never talk to the desktop session's bus, from here on or in any child.
+  # Never talk to the desktop session's bus, from here on or in any child. Only
+  # its hash goes to the inner stage, which refuses to run on that same bus.
+  if [[ -n ${DBUS_SESSION_BUS_ADDRESS:-} ]]; then
+    bus_sha=$(printf '%s' "$DBUS_SESSION_BUS_ADDRESS" | sha256sum | cut -d' ' -f1)
+  fi
   unset DBUS_SESSION_BUS_ADDRESS
 
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/tnu-integration.XXXXXXXX") || refuse "mktemp -d failed"
   tmp=$(_resolve "$tmp") || refuse "cannot resolve $tmp"
   if [[ ${TNU_IT_KEEP:-0} != 1 ]]; then
-    # shellcheck disable=SC2064 # expand now: tmp is local
-    trap "rm -rf -- '$tmp'" EXIT
+    # shellcheck disable=SC2064 # expand now (quoted with %q): tmp is local
+    trap "rm -rf -- $(printf '%q' "$tmp")" EXIT
   fi
   if [[ -n $(find "$tmp" -mindepth 1 -print -quit) ]]; then refuse "$tmp is not a fresh directory"; fi
   if [[ -n $real_home && ($tmp == "$real_home" || $real_home == "$tmp"/*) ]] ||
@@ -138,7 +150,7 @@ outer() {
     USER="${USER:-$(id -un)}" LOGNAME="${LOGNAME:-$(id -un)}" \
     PYTHONDONTWRITEBYTECODE=1 NO_COLOR=1 \
     TNU_IT_STAGE=inner TNU_IT_ROOT="$tmp" TNU_IT_TOKEN="$token" \
-    TNU_IT_REAL_HOME="$real_home" TNU_IT_PW_HOME="$pw_home" \
+    TNU_IT_REAL_HOME="$real_home" TNU_IT_PW_HOME="$pw_home" TNU_IT_REAL_BUS_SHA="$bus_sha" \
     TNU_IN_CONTAINER="${TNU_IN_CONTAINER:-}" TNU_REAL_REWAITA="${TNU_REAL_REWAITA:-0}" \
     TNU_IT_CACHE="${TNU_IT_CACHE:-}" \
     dbus-run-session -- bash "$SELF" "${ARGS[@]}" || rc=$?
@@ -148,7 +160,9 @@ outer() {
 # ---------------------------------------------------------------- inner stage
 
 # snapshot DIR EXCLUDE...: one line per entry ("sha mode path", "symlink path ->
-# target", "dir mode path/"), skipping the EXCLUDE subtrees.
+# target", "dir mode path/"), skipping the EXCLUDE subtrees. The line format
+# must match tree_snapshot in tests/test_helper.bash (this copy adds EXCLUDE;
+# that file needs bats, so it cannot be sourced here).
 snapshot() {
   local dir=$1 e
   local -a prune=()
@@ -180,6 +194,10 @@ run_install() {
   sed 's/^/    /' "$LOGS/$name.log" >&2
   awk '/^module +result/ { f = 1; next } /^log: / { f = 0 } f && NF' "$LOGS/$name.log" >"$LOGS/$name.summary"
   if ((rc != 0)); then fail "install.sh $* exited $rc"; fi
+  if [[ " $* " == *" --uninstall "* ]]; then return 0; fi # no module summary
+  # An unparsed summary would make the FAILED / CHANGED checks pass vacuously.
+  [[ -s $LOGS/$name.summary ]] || fail "no module summary in the output of install.sh $*"
+  grep -Eq '^gtk +(OK|CHANGED)' "$LOGS/$name.summary" || fail "no gtk result in the summary of install.sh $*"
   if grep -q 'FAILED' "$LOGS/$name.summary"; then fail "a module failed in: install.sh $*"; fi
 }
 
@@ -201,12 +219,19 @@ _gs_has() {
   grep -qxF -- "$1" <<<"$all"
 }
 
-# gs_expect SCHEMA[:PATH] KEY WANT [SCHEMADIR]: `gsettings get` prints WANT.
-# A value of the wrong GVariant type would read back as the schema default.
+# gs_expect SCHEMA[:PATH] KEY WANT [SCHEMADIR]: `gsettings get` prints WANT and
+# so does `dconf read` of the key's path. gsettings reads a value of the wrong
+# GVariant type back as the schema default, so the dconf read proves our own
+# write is there (a default equal to WANT cannot pass for it). The path is
+# PATH for a relocatable schema, else the schema id with dots as slashes
+# (true for every schema checked here; a wrong path reads empty and fails).
 gs_expect() {
-  local schema=$1 key=$2 want=$3 dir=${4:-} got
+  local schema=$1 key=$2 want=$3 dir=${4:-} got path raw
   local -a gs=(gsettings)
   if [[ -n $dir ]]; then gs+=(--schemadir "$dir"); fi
+  if [[ $schema == *:* ]]; then path=${schema#*:}; else path=/${schema//.//}/; fi
+  raw=$(dconf read "$path$key") || fail "dconf read $path$key failed"
+  if [[ $raw != "$want" ]]; then fail "dconf read $path$key: got '$raw', want $want"; fi
   got=$("${gs[@]}" get "$schema" "$key") || fail "gsettings get $schema $key failed"
   if [[ $got != "$want" ]]; then fail "gsettings get $schema $key: got $got, want $want"; fi
   printf '    ok %s %s = %s\n' "$schema" "$key" "$got" >&2
@@ -219,6 +244,7 @@ check_settings() {
   local ut=user-theme@gnome-shell-extensions.gcampax.github.com
   local osk=gjsosk-theme-sync@nadelacruz-00.github.io
   if [[ $variant == storm ]]; then palette=$'\'Tokyo Night Storm\''; fi
+  ran gtk || fail "the gtk module did not run"
   _gs_has $ifc || fail "schema $ifc is not installed (package gsettings-desktop-schemas)"
   gs_expect $ifc color-scheme "'prefer-dark'"
   gs_expect $ifc accent-color "'purple'"
@@ -309,14 +335,13 @@ gdm_alt() {
 }
 
 inner() {
-  local tok="" rc=0 snap_home snap_sys="" alt_before=""
+  local tok="" rc=0 snap_home snap_sys="" alt_before="" db
   local -a skip_mods skips excl
-  local gdm_on
   local tnu_dest=/usr/share/gnome-shell/theme/tokyonight-ubuntu/gnome-shell-theme.gresource
 
   # Re-check everything the outer stage set up: refuse on any doubt.
   local v
-  for v in TNU_IT_ROOT TNU_IT_TOKEN TNU_IT_REAL_HOME TNU_IT_PW_HOME HOME XDG_CONFIG_HOME \
+  for v in TNU_IT_ROOT TNU_IT_TOKEN TNU_IT_REAL_HOME TNU_IT_PW_HOME TNU_IT_REAL_BUS_SHA HOME XDG_CONFIG_HOME \
     XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR TMPDIR TNU_REAL_REWAITA; do
     declare -g "$v=${!v:-}"
   done
@@ -333,14 +358,26 @@ inner() {
     check_inside "$TNU_IT_ROOT" "$v" "${!v}"
   done
   [[ -n ${DBUS_SESSION_BUS_ADDRESS:-} ]] || refuse "not inside dbus-run-session"
+  if [[ -n $TNU_IT_REAL_BUS_SHA &&
+    $(printf '%s' "$DBUS_SESSION_BUS_ADDRESS" | sha256sum | cut -d' ' -f1) == "$TNU_IT_REAL_BUS_SHA" ]]; then
+    refuse "this is the desktop session's bus, not a private one"
+  fi
   LOGS=$TNU_IT_ROOT/logs
 
-  # Seed a user who already has some settings; the first dconf write must land
-  # in the temp HOME, or nothing else runs.
-  dconf write /org/gnome/desktop/interface/gtk-theme "'Adwaita'"
-  [[ -s $XDG_CONFIG_HOME/dconf/user ]] || refuse "dconf did not write to the temp HOME: not isolated"
-  [[ $(dconf read /org/gnome/desktop/interface/gtk-theme) == "'Adwaita'" ]] ||
+  # Isolation canary, before any real key is written: a throwaway key holding
+  # the token must create the temp HOME's dconf db and be found in it.
+  db=$XDG_CONFIG_HOME/dconf/user
+  [[ ! -e $db ]] || refuse "$db exists before the first write: not a fresh dconf"
+  dconf write /org/tokyonight-ubuntu/it-canary "'$TNU_IT_TOKEN'"
+  [[ -s $db ]] || refuse "dconf did not write to the temp HOME: not isolated"
+  grep -qaF -- "$TNU_IT_TOKEN" "$db" || refuse "the canary is not in $db: not isolated"
+  [[ $(dconf read /org/tokyonight-ubuntu/it-canary) == "'$TNU_IT_TOKEN'" ]] ||
     refuse "dconf read-back differs: not the private dconf"
+  dconf reset /org/tokyonight-ubuntu/it-canary
+  [[ -z $(dconf read /org/tokyonight-ubuntu/it-canary) ]] || refuse "cannot reset the canary"
+
+  # Seed a user who already has some settings.
+  dconf write /org/gnome/desktop/interface/gtk-theme "'Adwaita'"
   dconf write /org/gnome/shell/enabled-extensions "['foreign@example.com']"
   printf 'export TNU_SEEDED=1\n' >"$HOME/.zshrc"
   mkdir -p "$HOME/.config/gtk-4.0"
@@ -360,18 +397,13 @@ inner() {
     skips=()
     excl+=("$XDG_DATA_HOME/flatpak")
   fi
-  # With --system a missing optional package would make wallpaper (apt-get
-  # install) or gdm (no base theme) fail; leave them out, with a message.
-  gdm_on=$SYSTEM
-  if ((SYSTEM)) && [[ ! -f /usr/share/backgrounds/osselo-Ask_a_friend.jpg ]]; then
-    skip "wallpaper and gdm modules: the wallpaper (ubuntu-wallpapers-resolute) is not installed"
-    skips+=(wallpaper gdm)
-    gdm_on=0
-  elif ((SYSTEM)) && [[ ! -f /usr/share/gnome-shell/theme/Yaru/gnome-shell-theme.gresource &&
-    ! -f /usr/share/gnome-shell/theme/erhai/gnome-shell-theme.gresource ]]; then
-    skip "gdm module: no base GDM theme (yaru-theme-gnome-shell) is installed"
-    skips+=(gdm)
-    gdm_on=0
+  # --system must exercise wallpaper and gdm: their inputs are required packages.
+  if ((SYSTEM)); then
+    [[ -f /usr/share/backgrounds/osselo-Ask_a_friend.jpg ]] ||
+      fail "--system: the wallpaper is missing (install ubuntu-wallpapers-resolute)"
+    [[ -f /usr/share/gnome-shell/theme/Yaru/gnome-shell-theme.gresource ||
+      -f /usr/share/gnome-shell/theme/erhai/gnome-shell-theme.gresource ]] ||
+      fail "--system: no base GDM theme (install yaru-theme-gnome-shell)"
   fi
   skip_mods=()
   if ((${#skips[@]})); then
@@ -383,16 +415,20 @@ inner() {
   snap_home=$LOGS/home.before
   snapshot "$HOME" "${excl[@]}" >"$snap_home"
   dconf dump / >"$LOGS/dconf.before"
-  if ((gdm_on)); then
+  if ((SYSTEM)); then
     alt_before=$(gdm_alt)
     snap_sys=$LOGS/system.before
     snapshot /usr/share/gnome-shell >"$snap_sys"
   fi
 
   run_install first "${skip_mods[@]}"
+  if ((SYSTEM)); then
+    ran wallpaper || fail "--system: the wallpaper module did not run"
+    ran gdm || fail "--system: the gdm module did not run"
+  fi
   say "checking settings (tokyonight)"
   check_settings tokyonight
-  if ((gdm_on)); then
+  if ((SYSTEM)); then
     [[ $(gdm_alt) == "$tnu_dest" ]] || fail "gdm-theme.gresource Value is $(gdm_alt), want $tnu_dest"
     printf '    ok gdm-theme.gresource -> %s\n' "$tnu_dest" >&2
   fi
@@ -412,7 +448,7 @@ inner() {
   dconf dump / >"$LOGS/dconf.after"
   diff -u "$snap_home" "$LOGS/home.after" >&2 || fail "HOME differs after --uninstall"
   diff -u "$LOGS/dconf.before" "$LOGS/dconf.after" >&2 || fail "dconf differs after --uninstall"
-  if ((gdm_on)); then
+  if ((SYSTEM)); then
     [[ $(gdm_alt) == "$alt_before" ]] ||
       fail "gdm-theme.gresource Value is $(gdm_alt) after --uninstall, want ${alt_before:-none}"
     snapshot /usr/share/gnome-shell >"$LOGS/system.after"
