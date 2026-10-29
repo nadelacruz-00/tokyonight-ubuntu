@@ -14,7 +14,7 @@ setup() {
 }
 
 @test "passes on the supported platform" {
-  run_install -y
+  run_install -y --skip fonts,prompt
   assert_success
   assert_line --regexp '^preflight +OK$'
 }
@@ -44,7 +44,7 @@ setup() {
 
 @test "--force allows 24.04 with warning" {
   printf 'ID=ubuntu\nVERSION_ID="24.04"\n' >"$SYS_ROOT/etc/os-release"
-  STUB_UNAME_M=x86_64 run_install -y --force
+  STUB_UNAME_M=x86_64 run_install -y --force --skip fonts,prompt
   assert_success
   assert_output --partial "warning: preflight: unsupported OS: ubuntu 24.04"
   assert_output --partial "warning: preflight: unsupported architecture"
@@ -79,7 +79,7 @@ setup() {
   mkdir -p "$SYS_ROOT/usr/bin"
   printf '#!/bin/sh\n' >"$SYS_ROOT/usr/bin/gnome-shell"
   chmod +x "$SYS_ROOT/usr/bin/gnome-shell"
-  XDG_CURRENT_DESKTOP="" run_install -y
+  XDG_CURRENT_DESKTOP="" run_install -y --skip fonts,prompt
   assert_success
 }
 
