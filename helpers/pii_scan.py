@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""Scan files (and optionally git history) for personal identifiers."""
+
+import argparse
+import fnmatch
+import ipaddress
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+
+PNG_SIG = b"\x89PNG\r\n\x1a\n"
+PNG_META = {b"tEXt", b"iTXt", b"zTXt", b"eXIf"}
+
+EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})\b")
+EMAIL_OK = {
+    "noreply@anthropic.com",
+    # public GNOME extension UUIDs (name@domain shaped, not mailboxes)
+    "gjsosk@vishram1123.com",
+    "gjsosk-theme-sync@nadelacruz-00.github.io",
+    "user-theme@gnome-shell-extensions.gcampax.github.com",
+}
+# users.noreply.github.com plus RFC 2606 reserved names (documentation examples)
+EMAIL_DOMAIN_OK = re.compile(
+    r"(^|\.)(users\.noreply\.github\.com|example\.(com|net|org|invalid)|invalid|example|test)$",
+    re.IGNORECASE,
+)
+HOME_UNIX = re.compile(r"/home/([a-z_][a-z0-9_.-]*)")
+HOME_MAC = re.compile(r"/Users/([A-Za-z][\w.-]*)")
+HOME_OK = {"user", "someone", "example", "runner", "tester", "demo"}
+UUID = re.compile(
+    r"(?<![0-9A-Fa-f-])(?:[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
+    r"|[0-9A-Fa-f]{32})(?![0-9A-Fa-f-])"
+)
+MAC = re.compile(r"(?<![0-9A-Fa-f:-])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:-])")
+IPV4 = re.compile(r"(?<![\w.])(\d{1,3}(?:\.\d{1,3}){3})(?![\w]|\.\d)")
+IP_OK_NETS = [
+    ipaddress.ip_network(n)
+    for n in ("127.0.0.0/8", "0.0.0.0/32", "192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")
+]
+PRAGMA = "pii-scan: allow"
+
+# Relative-path patterns skipped during directory walks.
+SKIP_GLOBS = [".venv*", ".venv*/*", "*/__pycache__", "__pycache__", ".ruff_cache", ".ruff_cache/*", ".git", ".git/*", "*/.git", "*/.git/*", "tests/bats/bats-*", "tests/fixtures/pii", "tests/fixtures/pii/*"]
+
+
+def skipped(rel):
+    rel = rel.replace(os.sep, "/")
+    return any(fnmatch.fnmatch(rel, g) for g in SKIP_GLOBS)
+
+
+def scan_line(line, path, denylist):
+    """Yield (rule, excerpt) for one text line."""
+    if PRAGMA in line:
+        return
+    for m in EMAIL.finditer(line):
+        if m.group(0).lower() in EMAIL_OK or EMAIL_DOMAIN_OK.search(m.group(1)):
+            continue
+        yield "email", m.group(0)
+    for rx in (HOME_UNIX, HOME_MAC):
+        for m in rx.finditer(line):
+            if m.group(1).lower() not in HOME_OK:
+                yield "home-path", m.group(0)
+    if "sha256" not in line.lower() and not path.endswith("checksums.sha256"):
+        for m in UUID.finditer(line):
+            yield "uuid", m.group(0)
+    for m in MAC.finditer(line):
+        yield "mac", m.group(0)
+    for m in IPV4.finditer(line):
+        try:
+            ip = ipaddress.ip_address(m.group(1))
+        except ValueError:
+            continue
+        if not any(ip in n for n in IP_OK_NETS):
+            yield "ipv4", m.group(0)
+    low = line.lower()
+    for term in denylist:
+        if term in low:
+            yield "denylist", term
+
+
+def scan_text(text, path, denylist):
+    hits = []
+    for n, line in enumerate(text.splitlines(), 1):
+        for rule, ex in scan_line(line, path, denylist):
+            hits.append((path, n, rule, ex))
+    return hits
+
+
+def png_chunks(data):
+    pos = 8
+    while pos + 8 <= len(data):
+        length, ctype = struct.unpack(">I4s", data[pos : pos + 8])
+        yield ctype
+        pos += 12 + length
+
+
+def scan_file(path, denylist, ocr=False):
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError as exc:
+        print(f"pii_scan: cannot read {path}: {exc}", file=sys.stderr)
+        return []
+    if data.startswith(PNG_SIG):
+        hits = [(path, 1, "png-metadata", c.decode("ascii", "replace")) for c in png_chunks(data) if c in PNG_META]
+        if ocr and shutil.which("tesseract"):
+            r = subprocess.run(["tesseract", path, "stdout"], capture_output=True, text=True, check=False)
+            hits += scan_text(r.stdout, path, denylist)
+        return hits
+    if b"\0" in data[:8192]:
+        return []
+    return scan_text(data.decode("utf-8", errors="replace"), path, denylist)
+
+
+def walk(root):
+    """Yield files under root, honouring skip rules relative to root."""
+    if os.path.isfile(root):
+        yield root
+        return
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root)
+        dirnames[:] = sorted(d for d in dirnames if not skipped(os.path.normpath(os.path.join(rel_dir, d))))
+        for f in sorted(filenames):
+            rel = os.path.normpath(os.path.join(rel_dir, f))
+            if not skipped(rel):
+                yield os.path.join(dirpath, f)
+
+
+def scan_history(root, denylist):
+    hits = []
+    git = ["git", "-C", root]
+    r = subprocess.run([*git, "log", "--all", "--format=%ae%n%ce"], capture_output=True, text=True, check=False)
+    if r.returncode != 0:
+        print(f"pii_scan: git log failed in {root}", file=sys.stderr)
+        return hits
+    hits += scan_text(r.stdout, "history:authors", denylist)
+    r = subprocess.run([*git, "log", "-p", "--all", "--format=%H"], capture_output=True, text=True, errors="replace", check=False)
+    cur, skip = "history", False
+    for n, line in enumerate(r.stdout.splitlines(), 1):
+        if line.startswith("diff --git a/"):
+            cur = line[len("diff --git a/") :].split(" b/")[0]
+            skip = skipped(cur)
+            continue
+        if skip or line.startswith(("+++", "---")):
+            continue
+        for rule, ex in scan_line(line, cur, denylist):
+            hits.append((f"history:{cur}", n, rule, ex))
+    return hits
+
+
+def load_denylist(path):
+    terms = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            t = line.strip()
+            if t and not t.startswith("#"):
+                terms.append(t.lower())
+    return terms
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("paths", nargs="+", metavar="PATH")
+    ap.add_argument("--history", action="store_true")
+    ap.add_argument("--denylist")
+    ap.add_argument("--ocr", action="store_true")
+    args = ap.parse_args(argv)
+    try:
+        denylist = load_denylist(args.denylist) if args.denylist else []
+    except OSError as exc:
+        print(f"pii_scan: {exc}", file=sys.stderr)
+        return 2
+    hits = []
+    for p in args.paths:
+        if not os.path.exists(p):
+            print(f"pii_scan: no such path: {p}", file=sys.stderr)
+            return 2
+        for f in walk(p):
+            hits += scan_file(f, denylist, args.ocr)
+        if args.history and os.path.isdir(p):
+            hits += scan_history(p, denylist)
+    for path, n, rule, ex in hits:
+        print(f"{path}:{n}: {rule}: {ex.strip()[:100]}")
+    return 1 if hits else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

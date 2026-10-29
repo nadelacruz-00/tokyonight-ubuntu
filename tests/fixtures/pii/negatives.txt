@@ -1,0 +1,8 @@
+Co-Authored-By: Claude <noreply@anthropic.com>
+12345+bot@users.noreply.github.com
+/home/runner/work/repo
+${HOME}/x and ~/Development/x
+123e4567-e89b-42d3-a456-426614174000  assets/file sha256
+127.0.0.1 0.0.0.0 192.0.2.7 198.51.100.4 203.0.113.9 version 31.8.0
+user@example.com
+planted 10.1.2.3 /home/alice/x # pii-scan: allow
