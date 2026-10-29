@@ -1,0 +1,74 @@
+
+/* tokyonight-ubuntu overrides */
+#lockDialogGroup {
+  background: #1a1b26 url(resource:///org/gnome/shell/theme/tokyonight-bg.jpg);
+  background-size: cover;
+  background-position: center; }
+
+.login-dialog .login-dialog-prompt-entry,
+.unlock-dialog .login-dialog-prompt-entry {
+  background-color: #16161e;
+  color: #c0caf5; }
+.login-dialog .login-dialog-prompt-entry:hover,
+.unlock-dialog .login-dialog-prompt-entry:hover {
+  background-color: #414868;
+  color: #c0caf5; }
+.login-dialog .login-dialog-prompt-entry:focus,
+.unlock-dialog .login-dialog-prompt-entry:focus {
+  background-color: #16161e;
+  color: #c0caf5;
+  box-shadow: inset 0 0 0 2px rgba(122, 162, 247, 0.6) !important; }
+.login-dialog .login-dialog-prompt-entry StLabel.hint-text,
+.unlock-dialog .login-dialog-prompt-entry StLabel.hint-text {
+  color: rgba(192, 202, 245, 0.6); }
+
+.login-dialog-button.login-dialog-auth-menu-button, .login-dialog-button.a11y-button,
+.login-dialog-button.cancel-button, .login-dialog-button.switch-user-button,
+.login-dialog-button.login-dialog-session-list-button {
+  background-color: #16161e;
+  color: #c0caf5; }
+.login-dialog-button.login-dialog-auth-menu-button:hover, .login-dialog-button.a11y-button:hover,
+.login-dialog-button.cancel-button:hover, .login-dialog-button.switch-user-button:hover,
+.login-dialog-button.login-dialog-session-list-button:hover {
+  background-color: #414868; }
+.login-dialog .button.default, .unlock-dialog .button.default,
+.login-dialog .button.default:hover, .unlock-dialog .button.default:hover {
+  background-color: #7aa2f7;
+  color: #1a1b26; }
+
+.login-dialog-user-list-view .login-dialog-user-list .login-dialog-user-list-item {
+  color: #c0caf5; }
+.login-dialog-user-list-view .login-dialog-user-list .login-dialog-user-list-item:hover,
+.login-dialog-user-list-view .login-dialog-user-list .login-dialog-user-list-item:focus,
+.login-dialog-user-list-view .login-dialog-user-list .login-dialog-user-list-item:selected {
+  background-color: rgba(22, 22, 30, 0.85); }
+
+#keyboard {
+  background-color: #1a1b26;
+  box-shadow: none; }
+.keyboard-key, .keyboard-key:hover, .keyboard-key:focus, .keyboard-key:focus:hover {
+  background-color: #16161e;
+  color: #c0caf5;
+  box-shadow: 0 1px 0 0 rgba(0, 0, 0, 0.3); }
+.keyboard-key:hover, .keyboard-key:focus:hover {
+  background-color: #414868; }
+.keyboard-key:active, .keyboard-key:active:hover, .keyboard-key:active:focus {
+  background-color: rgba(122, 162, 247, 0.35);
+  color: #c0caf5; }
+.keyboard-key:checked, .keyboard-key:checked:hover, .keyboard-key:checked:active {
+  background-color: #7aa2f7;
+  color: #1a1b26; }
+.keyboard-key.default-key, .keyboard-key.default-key:hover {
+  background-color: #16161e;
+  color: #c0caf5; }
+.keyboard-key.default-key:hover {
+  background-color: #414868; }
+.keyboard-key.default-key:active, .keyboard-key.default-key:active:hover, .keyboard-key.default-key:active:focus {
+  background-color: rgba(122, 162, 247, 0.35);
+  color: #c0caf5; }
+.keyboard-key.default-key:checked, .keyboard-key.default-key:checked:hover,
+.keyboard-key.default-key:checked:active, .keyboard-key.default-key:latched {
+  background-color: #7aa2f7;
+  color: #1a1b26; }
+.word-suggestions StButton {
+  color: #c0caf5; }
