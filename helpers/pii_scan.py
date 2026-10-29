@@ -119,11 +119,14 @@ def repo_root(path):
     """Git toplevel containing path; else cwd when path is under it; else path."""
     p = os.path.abspath(path)
     d = p if os.path.isdir(p) else os.path.dirname(p)
-    r = subprocess.run(
-        ["git", "-C", d, "rev-parse", "--show-toplevel"], capture_output=True, text=True, errors="replace", check=False
-    )
-    if r.returncode == 0 and r.stdout.strip():
-        return os.path.realpath(r.stdout.strip())
+    try:
+        r = subprocess.run(
+            ["git", "-C", d, "rev-parse", "--show-toplevel"], capture_output=True, text=True, errors="replace", check=False
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return os.path.realpath(r.stdout.strip())
+    except OSError:  # git missing or not executable
+        pass
     cwd = os.path.realpath(os.getcwd())
     if os.path.realpath(p).startswith(cwd + os.sep) or os.path.realpath(p) == cwd:
         return cwd
@@ -146,10 +149,17 @@ def walk(root, base):
                 yield os.path.join(dirpath, f)
 
 
+class HistoryError(Exception):
+    pass
+
+
 def scan_history(root, denylist):
     hits = []
     git = ["git", "-C", root]
-    r = subprocess.run([*git, "log", "--all", "--format=%ae%n%ce"], capture_output=True, text=True, errors="replace", check=False)
+    try:
+        r = subprocess.run([*git, "log", "--all", "--format=%ae%n%ce"], capture_output=True, text=True, errors="replace", check=False)
+    except OSError as exc:
+        raise HistoryError(f"pii_scan: --history needs git ({exc})") from exc
     if r.returncode != 0:
         print(f"pii_scan: git log failed in {root}", file=sys.stderr)
         return hits
@@ -205,7 +215,11 @@ def main(argv=None):
                 continue
             hits += scan_file(f, denylist, args.ocr)
         if args.history and os.path.isdir(p):
-            hits += scan_history(p, denylist)
+            try:
+                hits += scan_history(p, denylist)
+            except HistoryError as exc:
+                print(exc, file=sys.stderr)
+                return 1
     for path, n, rule, ex in hits:
         print(f"{path}:{n}: {rule}: {ex.strip()[:100]}")
     return 1 if hits else 0

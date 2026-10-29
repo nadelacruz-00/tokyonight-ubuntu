@@ -148,6 +148,24 @@ class PiiScanTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("email", out)
 
+    def test_no_git_on_path(self):
+        import subprocess
+        import sys
+
+        d = os.path.join(self.tmp, "a")
+        os.makedirs(d)
+        shutil.copy(os.path.join(PII, "email.txt"), d)
+        cmd = [sys.executable, "-I", os.path.join(_path.HELPERS, "pii_scan.py")]
+        env = {"PATH": os.path.join(self.tmp, "empty")}
+        r = subprocess.run([*cmd, d], env=env, capture_output=True, text=True, check=False)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(": email: ", r.stdout)
+        self.assertNotIn("Traceback", r.stderr)
+        r = subprocess.run([*cmd, "--history", d], env=env, capture_output=True, text=True, check=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--history needs git", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
     def test_usage(self):
         self.assertEqual(scan()[0], 2)
         self.assertEqual(scan("/nonexistent/path")[0], 2)
