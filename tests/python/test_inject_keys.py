@@ -52,6 +52,12 @@ class AccelTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 self.m.events(bad)
 
+    def test_sigterm_becomes_systemexit(self):
+        # SystemExit unwinds through inject()'s finally (keys released, session stopped)
+        with self.assertRaises(SystemExit) as cm:
+            self.m._on_term(15, None)
+        self.assertEqual(cm.exception.code, 143)
+
     def test_main_usage_errors_need_no_bus(self):
         argv = sys.argv
         try:

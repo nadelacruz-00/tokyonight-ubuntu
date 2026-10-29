@@ -242,8 +242,10 @@ capture_screencast() {
   python3 -I "$ROOT/tools/screencast_still.py" "$1" && [[ -s $1 ]]
 }
 
+# capture_manual TMP SHOT DEST: the user presses Print Screen (picked up from
+# ~/Pictures/Screenshots) or saves the image as DEST; the result goes to TMP.
 capture_manual() {
-  local dest=$1 shot=$2 stamp newest
+  local tmp=$1 shot=$2 dest=$3 stamp newest
   if ((AUTO)); then
     echo "automatic capture failed for $shot (Shell.Screenshot and ScreenCast); --auto never falls back to manual" >&2
     return 1
@@ -257,14 +259,16 @@ capture_manual() {
     printf '  and then Enter here, or save the image yourself as: %s\n' "$dest"
     ask 'Press Enter when done... '
   fi
-  if [[ ! -s $dest ]]; then
+  # -newer the stamp made before the wait: only images saved meanwhile
+  if [[ -s $dest && $dest -nt $stamp ]]; then
+    cp -- "$dest" "$tmp"
+  else
     newest=$(find "$HOME/Pictures/Screenshots" -maxdepth 1 -name '*.png' -newer "$stamp" 2>/dev/null | LC_ALL=C sort | tail -n 1)
-    # -newer the stamp made before the wait: only shots taken meanwhile
-    if [[ -n $newest ]]; then cp -- "$newest" "$dest"; fi
+    if [[ -n $newest ]]; then cp -- "$newest" "$tmp"; fi
   fi
   rm -f -- "$stamp"
-  [[ -s $dest ]] || echo "no screenshot found; expected it at $dest" >&2
-  [[ -s $dest ]]
+  [[ -s $tmp ]] || echo "no new screenshot found; expected it at $dest" >&2
+  [[ -s $tmp ]]
 }
 
 # check_test_hook: loudly announce TNU_SHOT_CAPTURE and never let it write into
@@ -282,21 +286,35 @@ check_test_hook() {
   HOOK_CHECKED=1
 }
 
-capture() {
-  local dest=$1 shot=$2
-  if [[ -n ${TNU_SHOT_CAPTURE:-} ]]; then check_test_hook; fi
-  mkdir -p "$SHOT_DIR"
-  rm -f -- "$dest"
+# capture_into TMP SHOT DEST: write a new screenshot to TMP.
+capture_into() {
+  local tmp=$1 shot=$2 dest=$3
   if [[ -n ${TNU_SHOT_CAPTURE:-} ]]; then
-    # test hook: an executable that writes the PNG to $1
-    "$TNU_SHOT_CAPTURE" "$dest" && [[ -s $dest ]]
+    # test hook: an executable that writes the PNG to $1 ($2: target name)
+    "$TNU_SHOT_CAPTURE" "$tmp" "${dest##*/}" && [[ -s $tmp ]]
     return
   fi
-  if command -v gdbus >/dev/null 2>&1 && capture_shell "$dest"; then return 0; fi
-  rm -f -- "$dest"
-  if command -v gst-launch-1.0 >/dev/null 2>&1 && capture_screencast "$dest"; then return 0; fi
-  rm -f -- "$dest"
-  capture_manual "$dest" "$shot"
+  rm -f -- "$tmp"
+  if command -v gdbus >/dev/null 2>&1 && capture_shell "$tmp"; then return 0; fi
+  rm -f -- "$tmp"
+  if command -v gst-launch-1.0 >/dev/null 2>&1 && capture_screencast "$tmp"; then return 0; fi
+  rm -f -- "$tmp"
+  capture_manual "$tmp" "$shot" "$dest"
+}
+
+# capture DEST SHOT: capture into a temp file next to DEST; DEST is replaced
+# only by a non-empty new image, so a failed capture keeps the old file.
+capture() {
+  local dest=$1 shot=$2 tmp
+  if [[ -n ${TNU_SHOT_CAPTURE:-} ]]; then check_test_hook; fi
+  mkdir -p "$SHOT_DIR"
+  tmp=$(mktemp --suffix=.png "$SHOT_DIR/.$shot.XXXXXX")
+  if capture_into "$tmp" "$shot" "$dest" && [[ -s $tmp ]]; then
+    mv -f -- "$tmp" "$dest"
+    return 0
+  fi
+  rm -f -- "$tmp"
+  return 1
 }
 
 # --- post-processing -----------------------------------------------------------
@@ -578,19 +596,25 @@ storm_switch() {
   pause 2
 }
 
-# storm_restore: put the snapshot back and verify it (sha256 + dconf values).
+# storm_restore: put the snapshot back, verify it (sha256 + dconf values) and
+# make GNOME Shell reload its theme. INT/TERM/HUP are ignored meanwhile;
+# STORM_ON is cleared only on success, so the EXIT trap retries otherwise
+# (restore is idempotent).
 storm_restore() {
   ((STORM_ON)) || return 0
-  STORM_ON=0
   local rc=0
+  trap '' INT TERM HUP
   live_state_restore || rc=1
   live_state_verify || rc=1
+  if ((rc == 0)); then live_state_reload_shell || rc=1; fi
   if ((rc == 0)); then
+    STORM_ON=0
     live_state_drop
     echo "restored the Tokyo Night theme files and settings (sha256 verified)" >&2
   else
     echo "!!! THEME NOT FULLY RESTORED: backups kept in $LS_DIR" >&2
   fi
+  if ((! IN_CLEANUP)); then trap 'exit 130' INT TERM HUP; fi
   return "$rc"
 }
 
@@ -614,8 +638,12 @@ run_auto() {
   fi
 }
 
-# cleanup: undo whatever is still open or changed (EXIT trap).
+# cleanup: undo whatever is still open or changed (EXIT trap). Signals are
+# ignored from here on so a second Ctrl+C cannot cut the restore short.
+IN_CLEANUP=0
 cleanup() {
+  trap '' INT TERM HUP
+  IN_CLEANUP=1
   overview_close || true
   qs_close || true
   osk_close || true
@@ -635,7 +663,7 @@ main() {
   fi
   if [[ -n ${TNU_SHOT_CAPTURE:-} ]]; then check_test_hook; fi
   trap cleanup EXIT
-  trap 'exit 130' INT TERM
+  trap 'exit 130' INT TERM HUP
   OUTS=()
   if ((AUTO)); then
     run_auto

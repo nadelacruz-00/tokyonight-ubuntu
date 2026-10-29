@@ -20,15 +20,16 @@ DCONF_KEYS=(/org/gnome/shell/extensions/user-theme/name /org/gnome/desktop/inter
 source "$ROOT/tools/live_state.sh"
 
 restore() {
+  trap '' INT TERM HUP # a second Ctrl+C must not abort the restore
   live_state_restore || true
-  if live_state_verify; then
+  if live_state_verify && live_state_reload_shell; then
     live_state_drop
   else
     echo "!!! live theme files NOT fully restored; backups kept in $LS_DIR" >&2
   fi
 }
 trap restore EXIT
-trap 'exit 130' INT TERM
+trap 'exit 130' INT TERM HUP
 
 command -v flatpak >/dev/null || {
   echo "flatpak not found" >&2

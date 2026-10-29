@@ -165,8 +165,10 @@ _live_env() {
   : >"$READ_LOG"
   cat >"$BATS_TEST_TMPDIR/fake-capture" <<'FAKE'
 #!/usr/bin/env bash
-printf 'capture\t%s\n' "${1##*/}" >>"$STUB_LOG"
-if [[ ${1##*/} == "${FAIL_ON:-}" ]]; then exit 1; fi
+# $1: temp file to write, $2: the target's name
+printf 'capture\t%s\n' "$2" >>"$STUB_LOG"
+if [[ $2 == "${FAIL_ON:-}" ]]; then exit 1; fi
+if [[ $2 == "${INT_ON:-}" ]]; then kill -INT "$PPID"; fi
 python3 -I -c 'import sys,zlib,struct
 def c(t,b): return struct.pack(">I",len(b))+t+b+struct.pack(">I",zlib.crc32(t+b)&0xffffffff)
 open(sys.argv[1],"wb").write(b"\x89PNG\r\n\x1a\n"+c(b"IHDR",struct.pack(">IIBBBBB",1,1,8,2,0,0,0))+c(b"IDAT",zlib.compress(b"\x00\xff\x00\x00"))+c(b"IEND",b""))' "$1"
@@ -318,7 +320,7 @@ OSKG='gsettings\t--schemadir .*gjsosk@vishram1123\.com/schemas'
 @test "--auto: a manual fallback is a failure, never a prompt" {
   _live_source
   AUTO=1
-  run capture_manual "$BATS_TEST_TMPDIR/x.png" desktop
+  run capture_manual "$BATS_TEST_TMPDIR/tmp.png" desktop "$BATS_TEST_TMPDIR/x.png"
   assert_failure
   assert_output --partial "never falls back to manual"
 }
@@ -371,7 +373,7 @@ mkdir -p "$HOME/.local/share/themes/rewaita/gnome-shell"
 printf 'storm shell\n' >"$HOME/.local/share/themes/rewaita/gnome-shell/gnome-shell.css"
 printf '{"theme": "tokyonight-storm"}\n' >"$HOME/.var/app/io.github.swordpuffin.rewaita/data/prefs.json"
 dconf write /org/gnome/desktop/interface/accent-color "'purple'"
-dconf write /org/gnome/shell/extensions/user-theme/name "'rewaita'"
+if [[ -z ${KEEP_NAME:-} ]]; then dconf write /org/gnome/shell/extensions/user-theme/name "'rewaita'"; fi
 REWAITA
   chmod +x "$STUB_STATE/flatpak-run"
   : >"$STUB_LOG"
@@ -422,4 +424,68 @@ _assert_storm_restored() {
   assert_failure
   assert_output --partial "!!! RESTORE MISMATCH: dconf /org/gnome/desktop/interface/accent-color"
   assert_output --partial "THEME NOT FULLY RESTORED"
+  # backups live in the state dir (not /tmp) and the path is printed
+  [[ $LS_DIR == "$XDG_STATE_HOME/tokyonight-ubuntu/live-state."* && -d $LS_DIR ]]
+  assert_output --partial "kept in $LS_DIR"
+}
+
+@test "--with-storm: the shell theme is reloaded (name '' then back) when the name did not change" {
+  _storm_env
+  dconf write /org/gnome/shell/extensions/user-theme/name "'rewaita'"
+  : >"$STUB_LOG"
+  export KEEP_NAME=1
+  run "$TNU_ROOT/tools/screenshots.sh" --auto --with-storm --delay 0 desktop
+  assert_success
+  assert_output --partial "reloaded the GNOME Shell theme"
+  _assert_order '^capture\tdesktop-storm\.png$' \
+    "^dconf\twrite /org/gnome/shell/extensions/user-theme/name \\\\'\\\\'$" \
+    "^dconf\twrite /org/gnome/shell/extensions/user-theme/name \\\\'rewaita\\\\'$"
+  [[ $(dconf read /org/gnome/shell/extensions/user-theme/name) == "'rewaita'" ]]
+  [[ $(dconf read /org/gnome/desktop/interface/accent-color) == "'blue'" ]]
+  cmp "$BATS_TEST_TMPDIR/before/gtk4" "$HOME/.config/gtk-4.0/gtk.css"
+}
+
+@test "--with-storm: Ctrl+C (INT) during a storm capture still restores the theme" {
+  _storm_env
+  export INT_ON=desktop-storm.png
+  run "$TNU_ROOT/tools/screenshots.sh" --auto --with-storm --delay 0 desktop
+  assert_failure 130
+  assert_output --partial "sha256 verified"
+  _assert_storm_restored
+}
+
+@test "--with-storm: an INT arriving during the restore does not cut it short" {
+  _storm_env
+  rm -f "$BATS_TEST_TMPDIR/bin/dconf"
+  cat >"$BATS_TEST_TMPDIR/bin/dconf" <<WRAP
+#!/usr/bin/env bash
+if [[ \$1 == reset && -e $BATS_TEST_TMPDIR/int-once ]]; then
+  rm -f "$BATS_TEST_TMPDIR/int-once"
+  kill -INT "\$PPID"
+fi
+exec "$TNU_ROOT/tests/stubs/bin/dconf" "\$@"
+WRAP
+  chmod +x "$BATS_TEST_TMPDIR/bin/dconf"
+  : >"$BATS_TEST_TMPDIR/int-once"
+  run "$TNU_ROOT/tools/screenshots.sh" --auto --with-storm --delay 0 desktop
+  [[ ! -e $BATS_TEST_TMPDIR/int-once ]]
+  assert_success # the INT was ignored during the restore, the run finished
+  assert_output --partial "sha256 verified"
+  _assert_storm_restored
+}
+
+@test "capture failure keeps the existing target file (temp file, no leftovers)" {
+  _live_env
+  mkdir -p "$SHOT_DIR"
+  printf 'old bytes' >"$SHOT_DIR/desktop-tokyonight.png"
+  export FAIL_ON=desktop-tokyonight.png
+  run "$TNU_ROOT/tools/screenshots.sh" --auto --delay 0 desktop
+  assert_failure 1
+  [[ $(cat "$SHOT_DIR/desktop-tokyonight.png") == "old bytes" ]]
+  run find "$SHOT_DIR" -name '.desktop.*'
+  assert_output ""
+  unset FAIL_ON
+  run "$TNU_ROOT/tools/screenshots.sh" --auto --delay 0 desktop
+  assert_success
+  [[ $(head -c 4 "$SHOT_DIR/desktop-tokyonight.png" | tail -c 3) == PNG ]]
 }

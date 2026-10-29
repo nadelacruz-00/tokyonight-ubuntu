@@ -10,6 +10,7 @@ in order and released in reverse. Needs python3-gi.
 Exit status: 0 ok, 1 injection failed, 2 usage.
 """
 
+import signal
 import sys
 import time
 
@@ -74,9 +75,9 @@ def inject(accel):
     evs = events(accel)
     bus = Gio.bus_get_sync(Gio.BusType.SESSION)
     session = call(bus, "/org/gnome/Mutter/RemoteDesktop", RD, "CreateSession")[0]
-    call(bus, session, RD + ".Session", "Start")
     pressed = []
     try:
+        call(bus, session, RD + ".Session", "Start")
         for sym, down in evs:
             call(bus, session, RD + ".Session", "NotifyKeyboardKeysym", GLib.Variant("(ub)", (sym, down)))
             if down:
@@ -96,7 +97,12 @@ def inject(accel):
             pass
 
 
+def _on_term(signum, _frame):
+    sys.exit(128 + signum)  # SystemExit: the finally in inject() releases keys and stops
+
+
 def main():
+    signal.signal(signal.SIGTERM, _on_term)
     if len(sys.argv) != 2:
         print("usage: inject_keys.py ACCEL", file=sys.stderr)
         return 2

@@ -8,9 +8,17 @@
 #   live_state_restore                  write everything back (no-op when
 #                                       nothing was saved); UNSET -> dconf reset
 #   live_state_verify                   1 + loud message per mismatch
+#   live_state_reload_shell             make GNOME Shell re-read its theme CSS
+#                                       (user-theme name -> '' -> saved value)
 #   live_state_drop                     forget the snapshot (removes the copies)
 #
+# The copies live in ${XDG_STATE_HOME:-~/.local/state}/tokyonight-ubuntu/
+# live-state.XXXXXX (not /tmp), so they survive a reboot if a restore fails.
+# Callers mask INT/TERM/HUP while restoring; restore is idempotent.
+#
 # Globals: LS_DIR LS_FILES LS_KEYS LS_DCONF LS_SUM LS_ACTIVE.
+
+LS_SHELL_KEY=/org/gnome/shell/extensions/user-theme/name
 
 LS_DIR=""
 LS_ACTIVE=0
@@ -35,7 +43,9 @@ live_state_save() {
   done
   if (($#)); then shift; fi
   LS_KEYS=("$@")
-  LS_DIR=$(mktemp -d)
+  local base="${XDG_STATE_HOME:-$HOME/.local/state}/tokyonight-ubuntu"
+  mkdir -p -- "$base"
+  LS_DIR=$(mktemp -d "$base/live-state.XXXXXX")
   for i in "${!LS_FILES[@]}"; do
     f=${LS_FILES[$i]}
     if [[ -f $f ]]; then
@@ -98,7 +108,26 @@ live_state_verify() {
       bad=1
     fi
   done
+  if ((bad)); then echo "!!! backups of the original state are kept in $LS_DIR" >&2; fi
   return "$bad"
+}
+
+# live_state_reload_shell: the restored gnome-shell.css is only re-read when
+# the user-theme name changes, and after a restore it usually ends where it
+# started. Flip it to '' and back (only when it was set), then re-check it.
+live_state_reload_shell() {
+  ((LS_ACTIVE)) || return 0
+  local want=${LS_DCONF[$LS_SHELL_KEY]:-}
+  [[ -n $want ]] || return 0
+  dconf write "$LS_SHELL_KEY" "''" || return 1
+  sleep 1
+  dconf write "$LS_SHELL_KEY" "$want" || return 1
+  if [[ $(dconf read "$LS_SHELL_KEY") != "$want" ]]; then
+    echo "!!! RESTORE MISMATCH: dconf $LS_SHELL_KEY is not $want after the shell theme reload" >&2
+    echo "!!! backups of the original state are kept in $LS_DIR" >&2
+    return 1
+  fi
+  echo "reloaded the GNOME Shell theme ($want)" >&2
 }
 
 live_state_drop() {
