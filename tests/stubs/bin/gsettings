@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Stub: '[--schemadir DIR] get|set|reset SCHEMA KEY [VALUE]'.
+# State: $STUB_STATE/gsettings.tsv ("SCHEMA KEY"<TAB>value); 'get' of an
+# unknown key fails like a missing schema/key does.
+set -Eeuo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+# Log "NAME<TAB>%q-quoted args" so one spaced arg differs from two args.
+args=""
+if (($#)); then args=$(printf '%q ' "$@"); fi
+printf '%s\t%s\n' "${0##*/}" "${args% }" >>"${STUB_LOG:-/dev/null}"
+db="${STUB_STATE:?}/gsettings.tsv"
+touch "$db"
+if [[ ${1:-} == --schemadir ]]; then shift 2; fi
+cmd=${1:-} id="${2:-} ${3:-}"
+case $cmd in
+  get)
+    v=$(awk -F'\t' -v k="$id" '$1==k{v=$2; f=1} END{if(f)print v; else exit 1}' "$db") || {
+      echo "No such key ${3:-}" >&2
+      exit 1
+    }
+    printf '%s\n' "$v"
+    ;;
+  set | reset)
+    tmp=$(mktemp)
+    awk -F'\t' -v OFS='\t' -v k="$id" '$1!=k' "$db" >"$tmp"
+    if [[ $cmd == set ]]; then printf '%s\t%s\n' "$id" "${4:-}" >>"$tmp"; fi
+    mv -- "$tmp" "$db"
+    ;;
+esac

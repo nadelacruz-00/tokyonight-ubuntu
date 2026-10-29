@@ -16,32 +16,16 @@ PREFS="$HOME/.var/app/$APP/data/prefs.json"
 FILES=("$GTK4" "$GTK3" "$SHELLCSS" "$PREFS")
 DCONF_KEYS=(/org/gnome/shell/extensions/user-theme/name /org/gnome/desktop/interface/accent-color)
 
-BK="$(mktemp -d)"
-declare -A DCONF_BEFORE=()
+# shellcheck source=tools/live_state.sh
+source "$ROOT/tools/live_state.sh"
 
 restore() {
-  local i f
-  for i in "${!FILES[@]}"; do
-    f="${FILES[$i]}"
-    if [[ -f $BK/$i ]]; then
-      mkdir -p "${f%/*}"
-      cp -p -- "$BK/$i" "$f"
-    elif [[ -e $BK/absent.$i ]]; then
-      rm -f -- "$f"
-    fi
-  done
-  local k
-  for k in "${DCONF_KEYS[@]}"; do
-    if [[ -n ${DCONF_BEFORE[$k]+x} && $(dconf read "$k") != "${DCONF_BEFORE[$k]}" ]]; then
-      if [[ -n ${DCONF_BEFORE[$k]} ]]; then
-        dconf write "$k" "${DCONF_BEFORE[$k]}"
-      else
-        dconf reset "$k"
-      fi
-      echo "restored dconf $k" >&2
-    fi
-  done
-  rm -rf -- "$BK"
+  live_state_restore || true
+  if live_state_verify; then
+    live_state_drop
+  else
+    echo "!!! live theme files NOT fully restored; backups kept in $LS_DIR" >&2
+  fi
 }
 trap restore EXIT
 trap 'exit 130' INT TERM
@@ -55,11 +39,10 @@ flatpak info "$APP" >/dev/null 2>&1 || {
   exit 1
 }
 
-for i in "${!FILES[@]}"; do
-  if [[ -f ${FILES[$i]} ]]; then cp -p -- "${FILES[$i]}" "$BK/$i"; else : >"$BK/absent.$i"; fi
-done
 if command -v dconf >/dev/null; then
-  for k in "${DCONF_KEYS[@]}"; do DCONF_BEFORE[$k]="$(dconf read "$k")"; done
+  live_state_save "${FILES[@]}" -- "${DCONF_KEYS[@]}"
+else
+  live_state_save "${FILES[@]}" --
 fi
 
 gen() {

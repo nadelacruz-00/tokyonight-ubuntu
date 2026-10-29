@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Stub: logs the call; exits ${STUB_BUSCTL_RC:-0} (never touches a real bus).
+set -Eeuo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+# Log "NAME<TAB>%q-quoted args" so one spaced arg differs from two args.
+args=""
+if (($#)); then args=$(printf '%q ' "$@"); fi
+printf '%s\t%s\n' "${0##*/}" "${args% }" >>"${STUB_LOG:-/dev/null}"
+exit "${STUB_BUSCTL_RC:-0}"

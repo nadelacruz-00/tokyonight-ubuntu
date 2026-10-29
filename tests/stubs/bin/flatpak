@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Stub: 'flatpak info [--user] APP' succeeds iff $STUB_STATE/flatpak/APP exists;
-# 'flatpak install [flags] [remote] APP' creates it. APP is always the LAST argument.
+# 'flatpak install [flags] [remote] APP' creates it. APP is always the LAST argument
+# there. 'flatpak run APP ARGS...' runs $STUB_STATE/flatpak-run (if present) with
+# APP ARGS..., so a test can play the app's side effects.
 set -Eeuo pipefail
 shopt -s inherit_errexit
 IFS=$'\n\t'
@@ -12,6 +14,10 @@ app_dir="${STUB_STATE:?}/flatpak"
 app=""
 for a in "$@"; do app=$a; done
 case "${1:-}" in
+  run)
+    shift
+    if [[ -x $STUB_STATE/flatpak-run ]]; then "$STUB_STATE/flatpak-run" "$@"; fi
+    ;;
   info) [[ -e $app_dir/$app ]] ;;
   install)
     mkdir -p "$app_dir"

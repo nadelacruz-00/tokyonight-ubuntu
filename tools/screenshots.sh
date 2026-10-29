@@ -2,6 +2,7 @@
 # Maintainer tool: capture the README screenshots in the CURRENT desktop session.
 #
 #   tools/screenshots.sh [--variant tokyonight|storm] [--delay N] SHOT...
+#   tools/screenshots.sh --auto [--with-storm] [--delay N] [SHOT...]
 #
 # SHOT is one of: desktop overview quick-settings ptyxis osk. Output goes to
 # docs/screenshots/<shot>[-<variant>].png (desktop and ptyxis carry the
@@ -23,6 +24,18 @@
 # of metadata chunks (helpers/png_strip.py) and scanned with
 # `helpers/pii_scan.py --ocr`. Review every image yourself before committing.
 #
+# --auto: no prompts at all. One countdown (default 10 s) to minimise the
+# terminal, then every SHOT (default: all) in a fixed order: desktop; overview
+# (org.gnome.Shell OverviewActive); quick-settings (its keybinding, injected via
+# Mutter RemoteDesktop by tools/inject_keys.py, closed again with Escape);
+# ptyxis (demo window); osk (gjsosk's indicator `opened` key, restored after).
+# --with-storm (only with --auto) then switches the session to Tokyo Night
+# Storm with Rewaita, captures desktop-storm and ptyxis-storm, and restores the
+# theme files and dconf keys byte-for-byte (tools/live_state.sh, sha256
+# verified). Everything a step opens or changes is undone by an EXIT/INT/TERM
+# trap, so a failure midway leaves nothing open.
+# SHOT_DIR (environment) overrides the output directory.
+#
 # The ptyxis shot opens a sanitised terminal: empty environment, a temporary
 # HOME, USER=demo, HOSTNAME=ubuntu, a throwaway git repo, so the prompt shows
 # no real names or paths.
@@ -31,16 +44,32 @@ shopt -s inherit_errexit
 IFS=$'\n\t'
 
 ROOT="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
-SHOT_DIR="$ROOT/docs/screenshots"
+SHOT_DIR="${SHOT_DIR:-$ROOT/docs/screenshots}"
 MAX_BYTES=1572864
 VARIANTS=(tokyonight storm)
 ALL_SHOTS=(desktop overview quick-settings ptyxis osk)
 
+REWAITA=io.github.swordpuffin.rewaita
+OSK_SCHEMADIR="${SYS_ROOT:-}/usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/schemas"
+OSK_SCHEMA=org.gnome.shell.extensions.gjsosk.indicator
+
 VARIANT=tokyonight
 DELAY=0
+AUTO=0
+WITH_STORM=0
 SHOTS=()
+OUTS=()
 TMP_DEMO=""
 OMP_DIR=""
+# what is currently open / changed (undone by cleanup)
+OVERVIEW_OPEN=0
+QS_OPEN=0
+OSK_SET=0
+OSK_PREV=""
+STORM_ON=0
+
+# shellcheck source=tools/live_state.sh
+source "$ROOT/tools/live_state.sh"
 
 die() {
   printf 'screenshots: %s\n' "$*" >&2
@@ -50,10 +79,16 @@ die() {
 usage() {
   cat <<'USAGE'
 Usage: tools/screenshots.sh [--variant tokyonight|storm] [--delay N] SHOT...
+       tools/screenshots.sh --auto [--with-storm] [--delay N] [SHOT...]
 
---delay N   seconds to wait (counting down) before each capture instead of
-            waiting for Enter; lets you minimise this terminal first.
+--delay N     seconds to wait (counting down) before each capture instead of
+              waiting for Enter; lets you minimise this terminal first.
+--auto        no prompts: one countdown (--delay, default 10), then every SHOT
+              (default all) opens, is captured and is closed by itself.
+--with-storm  with --auto: afterwards switch to Tokyo Night Storm (Rewaita),
+              capture desktop and ptyxis again, restore the theme exactly.
 SHOT: desktop | overview | quick-settings | ptyxis | osk
+SHOT_DIR (environment) overrides the output directory.
 Writes docs/screenshots/<shot>[-<variant>].png (the variant suffix applies to
 desktop and ptyxis only). Run it in the session you want pictured, with the
 theme already installed (./install.sh --variant <variant>).
@@ -69,11 +104,14 @@ in_list() {
   return 1
 }
 
-# parse_args ARGS...: sets VARIANT and SHOTS; returns 2 on a usage error
-# (message on stderr), 3 for --help.
+# parse_args ARGS...: sets VARIANT DELAY AUTO WITH_STORM SHOTS; returns 2 on a
+# usage error (message on stderr), 3 for --help.
 parse_args() {
+  local delay_set=0 variant_set=0
   VARIANT=tokyonight
   DELAY=0
+  AUTO=0
+  WITH_STORM=0
   SHOTS=()
   while (($#)); do
     case $1 in
@@ -87,6 +125,7 @@ parse_args() {
           return 2
         fi
         VARIANT=$2
+        variant_set=1
         shift 2
         ;;
       --delay)
@@ -95,7 +134,16 @@ parse_args() {
           return 2
         fi
         DELAY=$((10#$2))
+        delay_set=1
         shift 2
+        ;;
+      --auto)
+        AUTO=1
+        shift
+        ;;
+      --with-storm)
+        WITH_STORM=1
+        shift
         ;;
       -h | --help) return 3 ;;
       -*)
@@ -112,6 +160,22 @@ parse_args() {
         ;;
     esac
   done
+  if ((WITH_STORM && ! AUTO)); then
+    echo "--with-storm needs --auto" >&2
+    return 2
+  fi
+  if ((AUTO)); then
+    if ((variant_set)); then
+      echo "--auto captures the installed theme as tokyonight (add --with-storm for storm); drop --variant" >&2
+      return 2
+    fi
+    if ((! delay_set)); then DELAY=10; fi
+    if ((${#SHOTS[@]} == 0)); then SHOTS=("${ALL_SHOTS[@]}"); fi
+    if ((WITH_STORM)) && ! in_list desktop "${SHOTS[@]}" && ! in_list ptyxis "${SHOTS[@]}"; then
+      echo "--with-storm only re-takes desktop and ptyxis; include at least one" >&2
+      return 2
+    fi
+  fi
   if ((${#SHOTS[@]} == 0)); then
     echo "no SHOT given (one of: ${ALL_SHOTS[*]})" >&2
     return 2
@@ -128,6 +192,16 @@ out_path() {
 
 file_size() {
   stat -c %s -- "$1"
+}
+
+# ask PROMPT: wait for Enter on the terminal (never used by --auto or --delay).
+ask() {
+  read -r -p "$1" _ || true
+}
+
+# pause SECONDS: let the shell settle after opening something.
+pause() {
+  sleep "$1"
 }
 
 # countdown N MSG: MSG, then a visible countdown on stderr.
@@ -147,7 +221,7 @@ wait_for_setup() {
   if ((DELAY > 0)); then
     countdown "$DELAY" "Minimise this terminal, then: $1"
   else
-    read -r -p "$1, then press Enter... " _ || true
+    ask "$1, then press Enter... "
   fi
 }
 
@@ -170,6 +244,10 @@ capture_screencast() {
 
 capture_manual() {
   local dest=$1 shot=$2 stamp newest
+  if ((AUTO)); then
+    echo "automatic capture failed for $shot (Shell.Screenshot and ScreenCast); --auto never falls back to manual" >&2
+    return 1
+  fi
   stamp=$(mktemp)
   printf '\nAutomatic capture is not available. Manual capture for "%s":\n' "$shot"
   printf '  press Print Screen (saves to ~/Pictures/Screenshots)\n'
@@ -177,7 +255,7 @@ capture_manual() {
     countdown "$DELAY" "  press Print Screen within the countdown (or save the image as $dest)"
   else
     printf '  and then Enter here, or save the image yourself as: %s\n' "$dest"
-    read -r -p 'Press Enter when done... ' _ || true
+    ask 'Press Enter when done... '
   fi
   if [[ ! -s $dest ]]; then
     newest=$(find "$HOME/Pictures/Screenshots" -maxdepth 1 -name '*.png' -newer "$stamp" 2>/dev/null | LC_ALL=C sort | tail -n 1)
@@ -190,22 +268,26 @@ capture_manual() {
 }
 
 # check_test_hook: loudly announce TNU_SHOT_CAPTURE and never let it write into
-# the repo's real docs/screenshots (exit 2).
+# (or delete from) the repo's real docs/screenshots (exit 2). Runs before any
+# file is touched.
+HOOK_CHECKED=0
 check_test_hook() {
+  ((HOOK_CHECKED)) && return 0
   echo "TEST HOOK ACTIVE: TNU_SHOT_CAPTURE=$TNU_SHOT_CAPTURE" >&2
   mkdir -p "$SHOT_DIR"
   if [[ $(cd "$SHOT_DIR" && pwd -P) == "$(cd "$ROOT/docs/screenshots" 2>/dev/null && pwd -P)" ]]; then
     echo "screenshots: refusing to use TNU_SHOT_CAPTURE with the real docs/screenshots (set SHOT_DIR)" >&2
     exit 2
   fi
+  HOOK_CHECKED=1
 }
 
 capture() {
   local dest=$1 shot=$2
+  if [[ -n ${TNU_SHOT_CAPTURE:-} ]]; then check_test_hook; fi
   mkdir -p "$SHOT_DIR"
   rm -f -- "$dest"
   if [[ -n ${TNU_SHOT_CAPTURE:-} ]]; then
-    check_test_hook
     # test hook: an executable that writes the PNG to $1
     "$TNU_SHOT_CAPTURE" "$dest" && [[ -s $dest ]]
     return
@@ -250,7 +332,7 @@ demo_cleanup() {
   if [[ -n $TMP_DEMO ]]; then
     local e p
     for e in /proc/[0-9]*/environ; do
-      if tr '\0' '\n' <"$e" 2>/dev/null | grep -qxF "ZDOTDIR=$TMP_DEMO/home"; then
+      if tr '\0' '\n' 2>/dev/null <"$e" | grep -qxF "ZDOTDIR=$TMP_DEMO/home"; then
         p=${e%/environ}
         kill "${p#/proc/}" 2>/dev/null || true
       fi
@@ -281,18 +363,19 @@ ls --color=always -lh --time-style=+ . | sed 1d
 RC
   (
     cd "$home/projects/demo"
-    export HOME=$home GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
-    git init -q -b main .
+    export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+    HOME=$home git init -q -b main .
     printf '# demo\n' >README.md
     printf '#!/bin/sh\necho hello\n' >run.sh
     chmod +x run.sh
     mkdir src docs
-    git -c user.name=demo -c user.email=demo@example.com add -A
-    git -c user.name=demo -c user.email=demo@example.com commit -q -m init
+    HOME=$home git -c user.name=demo -c user.email=demo@example.com add -A
+    HOME=$home git -c user.name=demo -c user.email=demo@example.com commit -q -m init
   )
 }
 
-shot_ptyxis() {
+# demo_open: the sanitised Ptyxis demo window (closed by demo_cleanup).
+demo_open() {
   command -v ptyxis >/dev/null 2>&1 || die "ptyxis is not installed"
   command -v zsh >/dev/null 2>&1 || die "zsh is not installed"
   demo_prepare
@@ -300,23 +383,97 @@ shot_ptyxis() {
   demo_path=$demo_path:${OMP_DIR:?}
   ptyxis --new-window -- env -i "HOME=$home" "ZDOTDIR=$home" USER=demo LOGNAME=demo \
     HOSTNAME=ubuntu "PATH=$demo_path" TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8 zsh -d -i &
-  sleep 4
+  pause 4
+}
+
+shot_ptyxis() {
+  demo_open
   if ((DELAY > 0)); then
     countdown "$DELAY" "The demo terminal is open. Minimise this terminal and leave the demo window in front."
   fi
+}
+
+# overview_set true|false: org.gnome.Shell's OverviewActive property (applied
+# asynchronously, within about a second).
+overview_set() {
+  busctl --user set-property org.gnome.Shell /org/gnome/Shell org.gnome.Shell OverviewActive b "$1" >/dev/null 2>&1
+}
+
+overview_open() {
+  overview_set true || return 1
+  OVERVIEW_OPEN=1
+}
+
+overview_close() {
+  if ((OVERVIEW_OPEN)); then
+    OVERVIEW_OPEN=0
+    overview_set false || echo "warning: could not close the overview (OverviewActive false failed)" >&2
+  fi
+  return 0
 }
 
 shot_overview() {
   if ((DELAY > 0)); then
     countdown "$DELAY" "Minimise this terminal; the overview opens by itself."
   fi
-  if busctl --user call org.gnome.Shell /org/gnome/Shell org.gnome.Shell FocusSearch >/dev/null 2>&1; then
-    sleep 2
+  if overview_open; then
+    pause 1
   elif ((DELAY == 0)); then
-    read -r -p 'Open the Activities overview (Super key), then press Enter... ' _ || true
+    ask 'Open the Activities overview (Super key), then press Enter... '
   else
-    die "could not open the overview (FocusSearch failed); open it yourself with --delay 0 or run without --delay"
+    die "could not open the overview (setting org.gnome.Shell OverviewActive failed); run without --delay and open it yourself"
   fi
+}
+
+# inject_keys ACCEL: press a key combination in the session (Mutter
+# RemoteDesktop). TNU_INJECT_KEYS (test only) replaces the injector.
+inject_keys() {
+  if [[ -n ${TNU_INJECT_KEYS:-} ]]; then
+    echo "TEST HOOK ACTIVE: TNU_INJECT_KEYS=$TNU_INJECT_KEYS" >&2
+    "$TNU_INJECT_KEYS" "$1"
+  else
+    python3 -I "$ROOT/tools/inject_keys.py" "$1"
+  fi
+}
+
+# qs_accel: the toggle-quick-settings binding (first entry), default <Super>s.
+qs_accel() {
+  local v a=""
+  if v=$(gsettings get org.gnome.shell.keybindings toggle-quick-settings 2>/dev/null); then
+    a=$(sed -n "s/^\['\([^']*\)'.*/\1/p" <<<"$v")
+  fi
+  printf '%s\n' "${a:-<Super>s}"
+}
+
+qs_open() {
+  inject_keys "$(qs_accel)" || return 1
+  QS_OPEN=1
+}
+
+qs_close() {
+  if ((QS_OPEN)); then
+    QS_OPEN=0
+    inject_keys Escape || echo "warning: could not close Quick Settings (press Escape)" >&2
+  fi
+  return 0
+}
+
+# osk_open: remember gjsosk's indicator `opened`, set it true. Returns 2 when
+# the gjsosk schema is not installed (shot skipped), 1 on failure.
+osk_open() {
+  [[ -d $OSK_SCHEMADIR ]] || return 2
+  OSK_PREV=$(gsettings --schemadir "$OSK_SCHEMADIR" get "$OSK_SCHEMA" opened) || return 1
+  OSK_SET=1
+  gsettings --schemadir "$OSK_SCHEMADIR" set "$OSK_SCHEMA" opened true || return 1
+}
+
+osk_close() {
+  if ((OSK_SET)); then
+    OSK_SET=0
+    gsettings --schemadir "$OSK_SCHEMADIR" set "$OSK_SCHEMA" opened "$OSK_PREV" ||
+      echo "warning: could not restore $OSK_SCHEMA opened=$OSK_PREV" >&2
+  fi
+  return 0
 }
 
 shot_quick_settings() {
@@ -343,14 +500,127 @@ capture_shot() {
       ;;
   esac
   capture "$dest" "$shot" || die "no screenshot produced for $shot"
+  overview_close
   postprocess "$dest"
   printf 'saved %s (%s bytes)\n' "${dest#"$ROOT"/}" "$(file_size "$dest")"
   if [[ $shot == ptyxis ]]; then
     if ((DELAY == 0)); then
-      read -r -p 'Close the demo terminal window, then press Enter... ' _ || true
+      ask 'Close the demo terminal window, then press Enter... '
     fi
     demo_cleanup
   fi
+}
+
+# --- --auto ---------------------------------------------------------------------
+
+# auto_shot SHOT: open, capture, close; no prompts. Appends the file to OUTS.
+auto_shot() {
+  local shot=$1 dest rc=0
+  dest=$(out_path "$shot" "$VARIANT")
+  echo "auto: $shot -> ${dest#"$ROOT"/}" >&2
+  case $shot in
+    overview)
+      overview_open || die "could not open the overview (setting org.gnome.Shell OverviewActive failed)"
+      pause 1
+      ;;
+    quick-settings)
+      qs_open || die "could not open Quick Settings (key injection failed)"
+      pause 1
+      ;;
+    ptyxis) demo_open ;;
+    osk)
+      osk_open || rc=$?
+      if ((rc == 2)); then
+        echo "warning: gjsosk schema not found ($OSK_SCHEMADIR); osk shot skipped" >&2
+        return 0
+      fi
+      ((rc == 0)) || die "could not open the on-screen keyboard ($OSK_SCHEMA opened)"
+      pause 1.5
+      ;;
+  esac
+  capture "$dest" "$shot" || die "no screenshot produced for $shot"
+  case $shot in
+    overview) overview_close ;;
+    quick-settings) qs_close ;;
+    ptyxis) demo_cleanup ;;
+    osk) osk_close ;;
+  esac
+  postprocess "$dest"
+  printf 'saved %s (%s bytes)\n' "${dest#"$ROOT"/}" "$(file_size "$dest")"
+  OUTS+=("$dest")
+}
+
+# The live files and keys Rewaita (and the Ptyxis palette) change; the same
+# set tools/regen-assets.sh restores.
+storm_files() {
+  printf '%s\n' "$HOME/.config/gtk-4.0/gtk.css" "$HOME/.config/gtk-3.0/gtk.css" \
+    "$HOME/.local/share/themes/rewaita/gnome-shell/gnome-shell.css" \
+    "$HOME/.var/app/$REWAITA/data/prefs.json"
+}
+
+# storm_switch: snapshot, then switch the session to Tokyo Night Storm.
+storm_switch() {
+  local uuid key
+  command -v flatpak >/dev/null 2>&1 || die "--with-storm needs flatpak"
+  flatpak info "$REWAITA" >/dev/null 2>&1 || die "--with-storm needs the Rewaita flatpak ($REWAITA)"
+  uuid=$(dconf read /org/gnome/Ptyxis/default-profile-uuid) || die "cannot read the Ptyxis default profile"
+  uuid=${uuid//\'/}
+  [[ $uuid =~ ^[A-Za-z0-9_-]+$ ]] || die "no Ptyxis default profile (run ./install.sh first)"
+  key=/org/gnome/Ptyxis/Profiles/$uuid/palette
+  local -a files
+  mapfile -t files < <(storm_files)
+  live_state_save "${files[@]}" -- /org/gnome/shell/extensions/user-theme/name \
+    /org/gnome/desktop/interface/accent-color "$key"
+  STORM_ON=1
+  echo "switching to Tokyo Night Storm (restored afterwards)" >&2
+  timeout 60 flatpak run "$REWAITA" --theme --theme=tokyonight-storm >&2 || die "Rewaita could not switch to tokyonight-storm"
+  dconf write "$key" "'Tokyo Night Storm'"
+  pause 2
+}
+
+# storm_restore: put the snapshot back and verify it (sha256 + dconf values).
+storm_restore() {
+  ((STORM_ON)) || return 0
+  STORM_ON=0
+  local rc=0
+  live_state_restore || rc=1
+  live_state_verify || rc=1
+  if ((rc == 0)); then
+    live_state_drop
+    echo "restored the Tokyo Night theme files and settings (sha256 verified)" >&2
+  else
+    echo "!!! THEME NOT FULLY RESTORED: backups kept in $LS_DIR" >&2
+  fi
+  return "$rc"
+}
+
+run_auto() {
+  local shot
+  echo "Close other windows and clear notifications: the whole monitor is captured."
+  if ((DELAY > 0)); then
+    countdown "$DELAY" "minimise this terminal; capturing all shots in $DELAY s"
+  fi
+  for shot in "${ALL_SHOTS[@]}"; do
+    if in_list "$shot" "${SHOTS[@]}"; then auto_shot "$shot"; fi
+  done
+  if ((WITH_STORM)); then
+    storm_switch
+    VARIANT=storm
+    for shot in desktop ptyxis; do
+      if in_list "$shot" "${SHOTS[@]}"; then auto_shot "$shot"; fi
+    done
+    VARIANT=tokyonight
+    storm_restore || die "the Tokyo Night theme was not fully restored (see above)"
+  fi
+}
+
+# cleanup: undo whatever is still open or changed (EXIT trap).
+cleanup() {
+  overview_close || true
+  qs_close || true
+  osk_close || true
+  demo_cleanup || true
+  if ! storm_restore; then exit 1; fi
 }
 
 main() {
@@ -363,14 +633,21 @@ main() {
     usage >&2
     return 2
   fi
-  trap demo_cleanup EXIT
-  local -a outs=()
-  for shot in "${SHOTS[@]}"; do
-    capture_shot "$shot"
-    outs+=("$(out_path "$shot" "$VARIANT")")
-  done
+  if [[ -n ${TNU_SHOT_CAPTURE:-} ]]; then check_test_hook; fi
+  trap cleanup EXIT
+  trap 'exit 130' INT TERM
+  OUTS=()
+  if ((AUTO)); then
+    run_auto
+  else
+    for shot in "${SHOTS[@]}"; do
+      capture_shot "$shot"
+      OUTS+=("$(out_path "$shot" "$VARIANT")")
+    done
+  fi
+  ((${#OUTS[@]})) || die "no screenshot taken"
   command -v tesseract >/dev/null 2>&1 || echo "warning: tesseract not installed; the PII scan skips OCR (read every image yourself)" >&2
-  python3 -I "$ROOT/helpers/pii_scan.py" --ocr "${outs[@]}"
+  python3 -I "$ROOT/helpers/pii_scan.py" --ocr "${OUTS[@]}"
   echo "pii scan clean. Now review each image by eye before committing."
 }
 

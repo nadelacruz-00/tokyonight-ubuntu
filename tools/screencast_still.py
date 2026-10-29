@@ -18,7 +18,7 @@ import time
 import gi
 
 gi.require_version("Gst", "1.0")
-from gi.repository import Gio, GLib, Gst  # noqa: E402
+from gi.repository import Gio, GLib, Gst
 
 SC = "org.gnome.Mutter.ScreenCast"
 DC = "org.gnome.Mutter.DisplayConfig"
