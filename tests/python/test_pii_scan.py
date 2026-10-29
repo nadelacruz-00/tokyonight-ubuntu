@@ -217,6 +217,44 @@ class PiiScanTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("email", out)
 
+    def test_history_author_and_committer_names_checked_against_denylist(self):
+        if shutil.which("git") is None:
+            self.skipTest("git missing")
+        with tempfile.TemporaryDirectory() as dd:
+            deny = os.path.join(dd, "deny")
+            with open(deny, "w", encoding="utf-8") as fh:
+                fh.write("zed quux\nyara vonk\n")
+            for env_name, who in (("GIT_AUTHOR_NAME", "Zed Quux"), ("GIT_COMMITTER_NAME", "Yara Vonk")):
+                with self.subTest(env_name):
+                    shutil.rmtree(os.path.join(self.tmp, ".git"), ignore_errors=True)
+                    self.git("init", "-q")
+                    with open(os.path.join(self.tmp, "a.txt"), "w", encoding="utf-8") as fh:
+                        fh.write("clean\n")
+                    env = dict(os.environ, GIT_AUTHOR_NAME="T", GIT_COMMITTER_NAME="T")
+                    env[env_name] = who
+                    subprocess.run(["git", "-C", self.tmp, "add", "a.txt"], check=True, capture_output=True)
+                    subprocess.run(
+                        ["git", "-C", self.tmp, "-c", "user.email=t@users.noreply.github.com", "commit", "-qm", "c"],
+                        env=env,
+                        check=True,
+                        capture_output=True,
+                    )
+                    self.assertEqual(scan("--denylist", deny, self.tmp), (0, ""))
+                    code, out = scan("--history", "--denylist", deny, self.tmp)
+                    self.assertEqual(code, 1)
+                    self.assertIn("history:authors:", out)
+                    self.assertIn(f"denylist: {who.lower()}", out)
+
+    def test_history_outside_a_git_repo_fails(self):
+        if shutil.which("git") is None:
+            self.skipTest("git missing")
+        with open(os.path.join(self.tmp, "a.txt"), "w", encoding="utf-8") as fh:
+            fh.write("clean\n")
+        r = _path.run("pii_scan", "--history", self.tmp)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not a git repository", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,7 +9,9 @@
 #   sysfile PATH  files/N|ABSENT  INSTALLED_SHA   (restored via as_root)
 #   dconf   KEY   OLD|UNSET       NEW
 #   dir     PATH                                  (created by us)
-#   pkg     flatpak|fontdir|bin|sysdir  NAME_OR_PATH   (replayed only with PURGE=1)
+#   pkg     flatpak|fontdir|bin|sysdir  NAME_OR_PATH   (replayed only with PURGE=1;
+#           `file` rows at or under a pkg PATH of the same manifest are deferred
+#           with it, so a plain --uninstall keeps the fonts and the binary)
 #   alt     NAME  PATH                            (update-alternatives --remove)
 #   block   FILE  CREATED(0|1)                    (handler lives in lib/edit.sh)
 #   line    FILE  MATCH_REGEX  OLD_LINE|ABSENT  NEW_LINE  SECTION   (handler in lib/edit.sh;
@@ -202,8 +204,10 @@ _replay_mark() {
 # Handler status: 0 = done (recorded), 1 = failed / still pending,
 # 2 = deliberately deferred (pkg without PURGE: not recorded, not a failure).
 # Returns 0 only when every row is done or deferred; else 1.
+# fc-cache runs once at the end when font files were removed or restored.
 backup_replay() {
   local dir=${1:?backup_replay: DIR required} purge=${2:-0} m line type want key i n st rc=0
+  local _replay_fonts=0
   local -a rows=() nums=() F=()
   local -A _replay_seen=() _replay_pkg_paths=() _replay_dir_paths=() _replay_done=() _replay_dconf_old=()
   m=$dir/manifest.tsv
@@ -280,6 +284,7 @@ backup_replay() {
         ;;
     esac
   done
+  if ((_replay_fonts)) && have_cmd fc-cache; then run fc-cache -f >/dev/null 2>&1 || true; fi
   return "$rc"
 }
 
@@ -318,18 +323,37 @@ _drifted() {
   log_warn "kept $1 (changed since install)"
 }
 
+# _pkg_owned PATH: PATH is, or lies under, a pkg row's path in the manifest
+# being replayed. Only valid inside backup_replay.
+_pkg_owned() {
+  local p
+  for p in "${!_replay_pkg_paths[@]}"; do
+    if [[ $p == /?* && ($1 == "$p" || $1 == "${p%/}"/*) ]]; then return 0; fi
+  done
+  return 1
+}
+
+# _font_touched PATH: note a font file change so backup_replay runs fc-cache.
+_font_touched() {
+  if [[ $1 == */fonts/* ]]; then _replay_fonts=1; fi
+}
+
 _replay_file() {
-  local dir=$1 path=$3 ref=$4 sha=$5 cur
+  local dir=$1 purge=$2 path=$3 ref=$4 sha=$5 cur
+  # Deferred with its pkg row: the "kept ... --purge" message comes from that row.
+  if [[ $purge != 1 ]] && _pkg_owned "$path"; then return 2; fi
   cur=$(_current_sha "$path")
   if [[ $cur == ABSENT && $ref == ABSENT ]]; then return 0; fi
   if _drifted "$path" "$cur" "$sha"; then return 0; fi
   if [[ $ref == ABSENT ]]; then
     run rm -f -- "$path" || return 1
+    _font_touched "$path"
     log_info "removed $path"
     return 0
   fi
   _backup_ref_ok "$dir" "$ref" || return 1
   run _restore_copy "$dir/$ref" "$path" || return 1
+  _font_touched "$path"
   log_info "restored $path"
 }
 
@@ -446,7 +470,7 @@ _replay_pkg() {
       ;;
     fontdir)
       _rm_tree "$name" || return 1
-      if have_cmd fc-cache; then run fc-cache -f >/dev/null 2>&1 || true; fi
+      _replay_fonts=1
       ;;
     bin)
       if [[ -e $name || -L $name ]]; then

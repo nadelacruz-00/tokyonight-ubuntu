@@ -31,6 +31,7 @@ setup() {
   assert_success
   assert_stub_called sudo
   assert_stub_called apt-get 'install -y ubuntu-wallpapers-resolute'
+  assert_stub_called apt-get 'update$'
   [[ $(dconf_get /org/gnome/desktop/background/picture-uri) == "$URI" ]]
 }
 

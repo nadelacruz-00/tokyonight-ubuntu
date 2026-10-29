@@ -153,20 +153,25 @@ class HistoryError(Exception):
     pass
 
 
-def scan_history(root, denylist):
-    hits = []
-    git = ["git", "-C", root]
+def _git_log(root, *args):
+    """stdout of `git -C root log ARGS`; HistoryError when git is missing or fails."""
     try:
-        r = subprocess.run([*git, "log", "--all", "--format=%ae%n%ce"], capture_output=True, text=True, errors="replace", check=False)
+        r = subprocess.run(["git", "-C", root, "log", *args], capture_output=True, text=True, errors="replace", check=False)
     except OSError as exc:
         raise HistoryError(f"pii_scan: --history needs git ({exc})") from exc
     if r.returncode != 0:
-        print(f"pii_scan: git log failed in {root}", file=sys.stderr)
-        return hits
-    hits += scan_text(r.stdout, "history:authors", denylist)
-    r = subprocess.run([*git, "log", "-p", "--all", "--format=%H"], capture_output=True, text=True, errors="replace", check=False)
+        detail = r.stderr.strip().splitlines()[-1:] or ["git log failed"]
+        raise HistoryError(f"pii_scan: --history: {root} is not a git repository or git log failed ({detail[0]})")
+    return r.stdout
+
+
+def scan_history(root, denylist):
+    hits = []
+    # Author and committer names and addresses (names matter for the denylist).
+    hits += scan_text(_git_log(root, "--all", "--format=%an%n%ae%n%cn%n%ce"), "history:authors", denylist)
+    out = _git_log(root, "-p", "--all", "--format=%H")
     cur, skip, header = "history", False, False
-    for n, line in enumerate(r.stdout.splitlines(), 1):
+    for n, line in enumerate(out.splitlines(), 1):
         if line.startswith("diff --git a/"):
             cur = line[len("diff --git a/") :].split(" b/")[0]
             skip, header = skipped(cur), True

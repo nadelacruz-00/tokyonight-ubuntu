@@ -84,6 +84,7 @@ EOS
   run_install -y --system --only gdm
   assert_failure 1
   assert_stub_called apt-get "install -y libglib2.0-dev-bin"
+  assert_stub_called apt-get 'update$'
 }
 
 @test "installs via sudo with priority 160" {
@@ -154,4 +155,29 @@ EOS
   assert_file_not_exists "$SYS_ROOT/$DEST"
   assert_dir_not_exists "$SYS_ROOT/$THEME/tokyonight-ubuntu"
   assert_tree_unchanged "$snap" "$SYS_ROOT"
+}
+
+@test "warns when gdm-theme.gresource is pinned manually to another theme" {
+  printf 'Name: gdm-theme.gresource\nLink: /usr/share/gnome-shell/gdm-theme.gresource\nStatus: manual\nBest: /%s\nValue: /usr/share/gnome-shell/theme/Yaru/gnome-shell-theme.gresource\n' "$DEST" \
+    >"$STUB_STATE/ua-query.gdm-theme.gresource"
+  run_install -y --system --only gdm
+  assert_success
+  assert_stub_called update-alternatives '--query gdm-theme.gresource'
+  assert_output --partial "pinned manually"
+  assert_output --partial "sudo update-alternatives --auto gdm-theme.gresource"
+}
+
+@test "no pin warning when the alternative is automatic or already ours" {
+  printf 'Name: gdm-theme.gresource\nStatus: auto\nValue: /usr/share/gnome-shell/theme/Yaru/gnome-shell-theme.gresource\n' \
+    >"$STUB_STATE/ua-query.gdm-theme.gresource"
+  run_install -y --system --only gdm
+  assert_success
+  refute_output --partial "pinned manually"
+  printf 'Name: gdm-theme.gresource\nStatus: manual\nValue: /%s\n' "$DEST" \
+    >"$STUB_STATE/ua-query.gdm-theme.gresource"
+  : >"$STUB_LOG"
+  run_install -y --system --only gdm
+  assert_success
+  assert_stub_called update-alternatives '--query gdm-theme.gresource'
+  refute_output --partial "pinned manually"
 }

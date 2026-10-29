@@ -305,3 +305,24 @@ checksums() {
   assert_file_not_exists "$HOME/f"
   assert_file_not_exists "$HOME/g"
 }
+
+@test "apt_install runs apt-get update once per run, before the first install" {
+  stub_enable sudo apt-get
+  run --separate-stderr env SYSTEM=1 bash -c 'source "$TNU_ROOT/tests/lib_loader.bash"
+    (apt_install flatpak); (apt_install gnome-shell-extensions); apt_install a b'
+  assert_success
+  run grep -c $'^apt-get\tupdate$' "$STUB_LOG"
+  assert_output 1
+  run grep $'^apt-get\t' "$STUB_LOG"
+  assert_line --index 0 $'apt-get\tupdate'
+  assert_line --index 1 $'apt-get\tinstall -y flatpak'
+  assert_line --index 2 $'apt-get\tinstall -y gnome-shell-extensions'
+  assert_line --index 3 $'apt-get\tinstall -y a b'
+}
+
+@test "apt_install refuses without --system" {
+  stub_enable sudo apt-get
+  run --separate-stderr libsh 'apt_install flatpak'
+  assert_failure
+  refute_stub_called apt-get
+}

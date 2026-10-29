@@ -256,6 +256,18 @@ as_root() {
   run sudo -- "$@"
 }
 
+# apt_install PKG...: `apt-get install -y PKG...` via as_root, after one
+# `apt-get update` per run (flag file in RUN_DIR, as modules run in subshells).
+# A failed update only warns: the install may still work from current lists.
+apt_install() {
+  local flag=${RUN_DIR:?RUN_DIR not set}/apt-updated
+  if [[ ! -e $flag ]]; then
+    as_root apt-get update || log_warn "apt-get update failed; installing from the current package lists"
+    : >"$flag" || die "cannot write $flag"
+  fi
+  as_root apt-get install -y "$@"
+}
+
 # sys_path PATH: PATH under SYS_ROOT (empty outside tests).
 sys_path() {
   printf '%s\n' "${SYS_ROOT:-}$1"

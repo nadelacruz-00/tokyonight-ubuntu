@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 # osk: GJS OSK colour sync extension, sizing, a Gboard-style split layout built
 # for the active keymap and, on erhai with --system, the split-flush patch.
-# Globals read: HAS_GJSOSK IS_ERHAI SYSTEM TNU_ROOT XDG_DATA_HOME XDG_CACHE_HOME.
+# Globals read: HAS_GJSOSK IS_ERHAI SYSTEM TNU_ROOT RUN_DIR XDG_DATA_HOME XDG_CACHE_HOME.
 
 register_module osk 80 0
 
@@ -109,11 +109,33 @@ _osk_sys_install() {
   log_info "installed $dest"
 }
 
+# _osk_backup_ext EXT: when the split-flush patch would change EXT, back it up
+# with a sysfile row (installed sha from a patched scratch copy) first, so
+# --uninstall --system restores the upstream file.
+_osk_backup_ext() {
+  local ext=$1 tmp sha ref
+  if [[ ! -f $ext ]]; then return 0; fi
+  tmp=$(mktemp -d "${RUN_DIR:?RUN_DIR not set}/osk.XXXXXXXX") || die "mktemp failed in $RUN_DIR"
+  cp -p -- "$ext" "$tmp/extension.js" || die "cannot copy $ext"
+  GJSOSK_EXT=$tmp/extension.js "$TNU_ROOT/assets/osk/gjsosk-split-flush" reapply >/dev/null 2>&1 || true
+  sha=$(sha256_of "$tmp/extension.js") || die "cannot read the patched copy of $ext"
+  rm -rf -- "$tmp"
+  if [[ $sha == "$(sha256_of "$ext")" ]]; then return 0; fi
+  if _dry; then
+    note_change "patch $ext"
+    return 0
+  fi
+  ref=$(backup_copy "$ext")
+  backup_record sysfile "$ext" "$ref" "$sha"
+  note_change "patch $ext"
+}
+
 _osk_split_flush() {
   local ext
   _osk_sys_install "$TNU_ROOT/assets/osk/gjsosk-split-flush" /usr/local/sbin/gjsosk-split-flush 755
   _osk_sys_install "$TNU_ROOT/assets/osk/99erhai-gjsosk-split-flush" /etc/apt/apt.conf.d/99erhai-gjsosk-split-flush 644
   ext=$(sys_path /usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/extension.js)
+  _osk_backup_ext "$ext"
   # No-op when already patched; GJSOSK_EXT keeps it inside SYS_ROOT in tests.
   as_root env "GJSOSK_EXT=$ext" "$(sys_path /usr/local/sbin/gjsosk-split-flush)" reapply
 }

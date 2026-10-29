@@ -58,3 +58,10 @@ _pngs() {
   run python3 -I "$TNU_ROOT/helpers/pii_scan.py" "$TNU_ROOT/README.md"
   assert_success
 }
+
+@test "README states Wayland only and that the flathub remote is kept on uninstall" {
+  run grep -n 'X11' "$TNU_ROOT/README.md"
+  assert_failure
+  grep -q 'GNOME 50 on a running Wayland session' "$TNU_ROOT/README.md"
+  grep -q 'kept, and so is the user-level `flathub` flatpak remote' "$TNU_ROOT/README.md"
+}

@@ -62,13 +62,14 @@ _rewaita_prefs() {
 
 rewaita_apply() {
   if [[ ${HAS_FLATPAK:-0} != 1 ]]; then
-    as_root apt-get install -y flatpak
+    apt_install flatpak
     note_change "apt-get install flatpak"
   fi
   run flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
   if ! flatpak info --user "$_REWAITA_APP" >/dev/null 2>&1; then
-    run flatpak install --user -y --noninteractive flathub "$_REWAITA_APP"
+    # Row first (crash-safe): purge checks `flatpak info` before uninstalling.
     backup_record pkg flatpak "$_REWAITA_APP"
+    run flatpak install --user -y --noninteractive flathub "$_REWAITA_APP"
     note_change "install flatpak $_REWAITA_APP"
   fi
   _rewaita_prefs

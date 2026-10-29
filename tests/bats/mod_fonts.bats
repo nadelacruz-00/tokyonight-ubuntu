@@ -102,3 +102,32 @@ manifest() {
   assert_file_exists "$DEST/mine.ttf"
   assert_file_not_exists "$DEST/JetBrainsMonoNerdFont-Regular.ttf"
 }
+
+@test "fonts plain uninstall keeps the fonts, --purge removes them and refreshes the cache" {
+  run_install -y --only fonts
+  assert_success
+  run_install -y --uninstall
+  assert_success
+  assert_file_exists "$DEST/JetBrainsMonoNerdFont-Regular.ttf"
+  assert_file_exists "$DEST/JetBrainsMonoNerdFont-Bold.ttf"
+  assert_output --partial "kept fontdir $DEST (uninstall with --purge to remove it)"
+  refute_output --partial "removed $DEST"
+  : >"$STUB_LOG"
+  run_install -y --uninstall --purge
+  assert_success
+  assert_dir_not_exists "$DEST"
+  assert_stub_called fc-cache '-f'
+}
+
+@test "fonts uninstall of files added to an existing dir removes them and runs fc-cache" {
+  mkdir -p "$DEST"
+  printf 'mine\n' >"$DEST/mine.ttf"
+  run_install -y --only fonts
+  assert_success
+  : >"$STUB_LOG"
+  run_install -y --uninstall
+  assert_success
+  assert_file_exists "$DEST/mine.ttf"
+  assert_file_not_exists "$DEST/JetBrainsMonoNerdFont-Regular.ttf"
+  assert_stub_called fc-cache '-f'
+}
