@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf "%s\t%s\n" "${0##*/}" "$*" >>"${STUB_LOG:-/dev/null}"
+app_dir="${STUB_STATE:?}/flatpak"
+case "${1:-}" in
+  info) [[ -e $app_dir/${2:-} ]] ;;
+  install)
+    for a in "${@:2}"; do [[ $a == -* || $a == flathub ]] || {
+      mkdir -p "$app_dir"
+      : >"$app_dir/$a"
+    }; done
+    ;;
+esac

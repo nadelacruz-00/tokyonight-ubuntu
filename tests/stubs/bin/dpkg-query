@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf "%s\t%s\n" "${0##*/}" "$*" >>"${STUB_LOG:-/dev/null}"
+[[ ${1:-} == -W ]] && [[ -e ${STUB_STATE:?}/pkgs/${2:-} ]]

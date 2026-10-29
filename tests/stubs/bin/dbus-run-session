@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf "%s\t%s\n" "${0##*/}" "$*" >>"${STUB_LOG:-/dev/null}"
+while [[ ${1:-} != -- && $# -gt 0 ]]; do shift; done
+shift || true
+exec "$@"

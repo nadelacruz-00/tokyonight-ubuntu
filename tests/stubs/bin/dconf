@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf "%s\t%s\n" "${0##*/}" "$*" >>"${STUB_LOG:-/dev/null}"
+db="${STUB_STATE:?}/dconf.tsv"
+touch "$db"
+rewrite() { # rewrite <awk-condition on $1 as k>
+  local tmp
+  tmp=$(mktemp)
+  awk -F'\t' -v OFS='\t' "$1" "$db" >"$tmp"
+  mv "$tmp" "$db"
+}
+case "${1:-}" in
+  read) awk -F'\t' -v k="${2:-}" '$1==k{v=$2} END{if(v!="")print v}' "$db" ;;
+  write)
+    rewrite "\$1!=\"$2\""
+    printf '%s\t%s\n' "$2" "$3" >>"$db"
+    ;;
+  reset)
+    shift
+    [[ ${1:-} == -f ]] && shift
+    k=$1
+    if [[ $k == */ ]]; then
+      tmp=$(mktemp)
+      awk -F'\t' -v p="$k" 'index($1,p)!=1' "$db" >"$tmp"
+      mv "$tmp" "$db"
+    else
+      tmp=$(mktemp)
+      awk -F'\t' -v k="$k" '$1!=k' "$db" >"$tmp"
+      mv "$tmp" "$db"
+    fi
+    ;;
+  dump)
+    dir=${2:-/}
+    sort "$db" | awk -F'\t' -v p="$dir" 'index($1,p)==1{
+      rest=substr($1,length(p)+1); n=index(rest,"/")
+      sec=(n? substr(rest,1,n) : "")
+      key=(n? substr(rest,n+1) : rest)
+      if(sec!=last){print "[" (sec==""?"/":substr(sec,1,length(sec)-1)) "]"; last=sec}
+      print key "=" $2 }'
+    ;;
+  list)
+    dir=${2:-/}
+    awk -F'\t' -v p="$dir" 'index($1,p)==1{
+      rest=substr($1,length(p)+1); n=index(rest,"/")
+      print (n? substr(rest,1,n) : rest) }' "$db" | sort -u
+    ;;
+esac

@@ -1,0 +1,4 @@
+# One term per line; copy to .pii-denylist (untracked) and add your own.
+Jane Doe
+my-hostname
+jane@example.invalid

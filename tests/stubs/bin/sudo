@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf "%s\t%s\n" "${0##*/}" "$*" >>"${STUB_LOG:-/dev/null}"
+while [[ ${1:-} == -* ]]; do
+  if [[ $1 == -- ]]; then break; fi
+  shift
+done
+[[ ${1:-} == -- ]] && shift
+exec "$@"

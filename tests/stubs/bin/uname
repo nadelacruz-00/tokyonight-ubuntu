@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf "%s\t%s\n" "${0##*/}" "$*" >>"${STUB_LOG:-/dev/null}"
+if [[ ${1:-} == -m ]]; then
+  echo "${STUB_UNAME_M:-aarch64}"
+else
+  echo Linux
+fi

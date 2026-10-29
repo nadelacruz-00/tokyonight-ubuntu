@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf "%s\t%s\n" "${0##*/}" "$*" >>"${STUB_LOG:-/dev/null}"
+[[ ${1:-} == version ]] && echo "${STUB_OMP_VERSION:-31.8.0}"
+exit 0
