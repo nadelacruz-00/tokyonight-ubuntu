@@ -1,0 +1,52 @@
+#!/bin/sh
+# erhai: keep the GJS OSK split halves flush with both screen edges.
+#
+# Upstream sizes the spacer between the two halves as
+#   box.width * (1 - widthPercent) - 10 + border-spacing
+# which leaves the right half 8 logical px short of the right screen edge.
+# This rewrites that one line to box.width - 2 * halfWidth.
+#
+# Run after every dpkg run by /etc/apt/apt.conf.d/99erhai-gjsosk-split-flush,
+# because oneplus-erhai-desktop upgrades replace extension.js.
+#   gjsosk-split-flush [reapply]   patch if needed (no-op when already patched)
+#   gjsosk-split-flush status      report patched / unpatched / unknown
+#   gjsosk-split-flush uninstall   remove the hook and this script (then
+#                                  `apt reinstall oneplus-erhai-desktop` restores upstream)
+# GJSOSK_EXT overrides the file path (for testing).
+F="${GJSOSK_EXT:-/usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/extension.js}"
+OLD='                width: this.box.width * (1 - this.widthPercent) - 10 + this.settings.get_int("border-spacing-px")'
+NEW='                width: this.box.width - 2 * (Math.round((monitor.width - this.settings.get_int("snap-spacing-px") * 2) * this.widthPercent) / 2) // [erhai] halves flush with both screen edges'
+TAG='// [erhai] halves flush with both screen edges'
+
+state() {
+    [ -f "$F" ] || { echo absent; return; }
+    if grep -qF "$TAG" "$F"; then echo patched
+    elif [ "$(grep -cF "$OLD" "$F")" = 1 ]; then echo unpatched
+    else echo unknown; fi
+}
+
+case "${1:-reapply}" in
+status)
+    echo "gjsosk-split-flush: $(state) ($F)" ;;
+reapply)
+    case "$(state)" in
+    patched|absent) ;;
+    unknown) echo "gjsosk-split-flush: split-spacer line changed upstream; not patching $F" >&2 ;;
+    unpatched)
+        tmp="$F.split-flush.$$"
+        python3 - "$F" "$OLD" "$NEW" "$tmp" <<'PY' && mv "$tmp" "$F" || { rm -f "$tmp"; echo "gjsosk-split-flush: patch failed" >&2; exit 0; }
+import shutil, sys
+p, old, new, tmp = sys.argv[1:]
+s = open(p).read()
+open(tmp, "w").write(s.replace(old, new, 1))
+shutil.copymode(p, tmp)
+PY
+        echo "gjsosk-split-flush: re-patched $F (log out and back in to load it)" ;;
+    esac ;;
+uninstall)
+    rm -f /etc/apt/apt.conf.d/99erhai-gjsosk-split-flush "$0"
+    echo "removed; run 'sudo apt reinstall oneplus-erhai-desktop' to restore the upstream extension.js" ;;
+*)
+    echo "usage: $0 [reapply|status|uninstall]" >&2; exit 2 ;;
+esac
+exit 0
