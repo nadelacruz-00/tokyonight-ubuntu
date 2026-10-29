@@ -3,8 +3,10 @@
 # preflight: refuse root, check the platform, tools and free space, then
 # detect the environment (lib/detect.sh). Always runs, in the main shell.
 # --force turns OS / architecture / desktop failures into warnings; root and
-# a missing python3 are never allowed.
-# Globals read: TNU_EUID (test override of EUID) FORCE SYS_ROOT HOME
+# a missing python3 are never allowed. --uninstall only warns about the
+# platform (undoing must work after an OS upgrade); --uninstall and --status
+# download nothing and write little, so they skip the curl and free-space checks.
+# Globals read: TNU_EUID (test override of EUID) FORCE MODE SYS_ROOT HOME
 # XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS.
 
 register_module preflight 0 0
@@ -23,10 +25,12 @@ _os_release_field() {
   done <"$1"
 }
 
-# _soft_fail MSG: an error, or only a warning with --force. Sets _pf_fail.
+# _soft_fail MSG: an error, or only a warning with --force or --uninstall. Sets _pf_fail.
 _soft_fail() {
   if [[ ${FORCE:-0} == 1 ]]; then
     log_warn "$1 (continuing: --force)"
+  elif [[ ${MODE:-apply} == uninstall ]]; then
+    log_warn "$1 (continuing: uninstall)"
   else
     log_error "$1 (use --force to try anyway)"
     _pf_fail=1
@@ -54,9 +58,15 @@ _preflight_platform() {
   fi
 }
 
+# _preflight_light: uninstall/status mode (no downloads, no space check).
+_preflight_light() {
+  [[ ${MODE:-apply} == uninstall || ${MODE:-apply} == status ]]
+}
+
 _preflight_tools() {
-  local c missing=()
-  for c in dconf curl sha256sum install flock df; do
+  local c missing=() need=(dconf sha256sum install flock)
+  if ! _preflight_light; then need+=(curl df); fi
+  for c in "${need[@]}"; do
     if ! have_cmd "$c"; then missing+=("$c"); fi
   done
   if [[ -z ${DBUS_SESSION_BUS_ADDRESS:-} ]] && ! have_cmd dbus-run-session; then
@@ -107,7 +117,7 @@ preflight_apply() {
   fi
   _preflight_platform
   _preflight_tools
-  _preflight_space
+  if ! _preflight_light; then _preflight_space; fi
   if ((_pf_fail)); then return 1; fi
   detect_env
 }

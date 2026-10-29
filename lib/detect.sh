@@ -22,7 +22,12 @@ _is_erhai() {
   if [[ -f $(sys_path /usr/share/gnome-shell/theme/erhai/gnome-shell-theme.gresource) ]]; then
     return 0
   fi
-  have_cmd dpkg-query && dpkg-query -W oneplus-erhai-desktop >/dev/null 2>&1
+  # Installed, not just known to dpkg (a removed package in "rc" state is not).
+  local st
+  have_cmd dpkg-query || return 1
+  # shellcheck disable=SC2016 # dpkg-query expands ${db:Status-Abbrev} itself
+  st=$(dpkg-query -W -f='${db:Status-Abbrev}' oneplus-erhai-desktop 2>/dev/null) || return 1
+  [[ $st == ii* ]]
 }
 
 _has_session_bus() {

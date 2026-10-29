@@ -128,3 +128,42 @@ EOF
   assert_success
   assert_output --partial "probe sees zsh=1 erhai=0"
 }
+
+@test "IS_ERHAI ignores a removed package left in rc state" {
+  lib_setup
+  : >"$STUB_STATE/pkgs/oneplus-erhai-desktop"
+  mkdir -p "$STUB_STATE/pkg-status"
+  printf 'rc \n' >"$STUB_STATE/pkg-status/oneplus-erhai-desktop"
+  run --separate-stderr libsh 'detect_env; echo "$IS_ERHAI"'
+  assert_output 0
+  printf 'ii \n' >"$STUB_STATE/pkg-status/oneplus-erhai-desktop"
+  run --separate-stderr libsh 'detect_env; echo "$IS_ERHAI"'
+  assert_output 1
+}
+
+@test "uninstall and status work without curl" {
+  stub_disable curl
+  run_install -y --uninstall
+  assert_success
+  assert_output --partial "nothing to uninstall"
+  TNU_EUID=1000 run --separate-stderr "$TNU_ROOT/install.sh" --status
+  assert_success
+  # Applying still needs it.
+  run_install -y
+  assert_failure 3
+}
+
+@test "uninstall on 24.04 works without --force, with a warning" {
+  printf 'ID=ubuntu\nVERSION_ID="24.04"\n' >"$SYS_ROOT/etc/os-release"
+  run_install -y --uninstall
+  assert_success
+  assert_output --partial "warning: preflight: unsupported OS: ubuntu 24.04 (needs Ubuntu 26.04) (continuing: uninstall)"
+  # Status is not relaxed.
+  run_install --status
+  assert_failure 3
+}
+
+@test "uninstall still refuses root" {
+  TNU_EUID=0 run "$TNU_ROOT/install.sh" -y --uninstall --force
+  assert_failure 3
+}

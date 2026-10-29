@@ -6,6 +6,7 @@
 bats_require_minimum_version 1.5.0
 
 load ../test_helper
+load ../lib_test_helper
 
 setup() {
   setup_sandbox
@@ -157,19 +158,27 @@ backup_count() {
   assert_success
 }
 
-@test "SIGTERM mid-module releases lock and re-run converges" {
+# interrupt_converges SIG: start an install whose alpha module sleeps, send
+# SIG to install.sh mid-module, then check exit 130, lock released, no
+# leftover grandchild, and that a re-run converges and uninstall restores.
+# SIGINT is reset to default first: bash starts background jobs of a
+# non-interactive shell with SIGINT ignored, and an ignored signal cannot be trapped.
+interrupt_converges() {
+  local sig=$1
   printf 'original\n' >"$HOME/alpha.txt"
   local snap="$BATS_TEST_TMPDIR/snap" out="$BATS_TEST_TMPDIR/out" i rc=0
   tree_snapshot "$HOME" >"$snap"
   ALPHA_SLEEP=47.3 ALPHA_MARK="$BATS_TEST_TMPDIR/mark" TNU_EUID=1000 \
-    "$TNU_ROOT/install.sh" -y --only alpha >"$out" 2>&1 3>&- &
+    python3 -I -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+os.execv(sys.argv[1], sys.argv[1:])' "$TNU_ROOT/install.sh" -y --only alpha >"$out" 2>&1 3>&- &
   BG_PID=$!
   for ((i = 0; i < 100; i++)); do
     if [[ -e $BATS_TEST_TMPDIR/mark ]]; then break; fi
     sleep 0.1
   done
   assert_file_exists "$BATS_TEST_TMPDIR/mark"
-  kill -TERM "$BG_PID"
+  kill "-$sig" "$BG_PID"
   wait "$BG_PID" || rc=$?
   BG_PID=""
   [[ $rc == 130 ]]
@@ -191,6 +200,82 @@ backup_count() {
   drop_state
   assert_tree_unchanged "$snap" "$HOME"
   [[ -z $(dconf_get /org/tnu/test/alpha) ]]
+}
+
+@test "SIGTERM mid-module releases lock and re-run converges" {
+  interrupt_converges TERM
+}
+
+@test "SIGINT mid-module behaves like SIGTERM" {
+  interrupt_converges INT
+}
+
+@test "the signal handler only kills a pid that is still its child" {
+  lib_setup
+  run --separate-stderr libsh '
+    orphan=$(bash -c "sleep 41.7 >/dev/null 2>&1 & echo \$!")
+    sleep 0.2
+    _tnu_kill_child "$orphan"
+    sleep 0.2
+    if kill -0 "$orphan" 2>/dev/null; then echo "orphan alive"; kill "$orphan"; fi
+    sleep 41.8 &
+    child=$!
+    _tnu_kill_child "$child"
+    wait "$child" || echo "child killed rc=$?"'
+  assert_success
+  assert_output $'orphan alive\nchild killed rc=143'
+}
+
+@test "uninstall takes the lock" {
+  run_install -y --skip beta
+  assert_success
+  flock "$STATE/lock" sleep 30 3>&- &
+  BG_PID=$!
+  local i
+  for ((i = 0; i < 50; i++)); do
+    if ! flock -n "$STATE/lock" bash -c :; then break; fi
+    sleep 0.1
+  done
+  run_install -y --uninstall
+  assert_failure 4
+  assert_output --partial "another install is running"
+  assert_file_exists "$HOME/alpha.txt"
+  [[ $(backup_count) == 1 ]]
+}
+
+@test "--purge after a plain --uninstall removes the deferred pkg path" {
+  mkdir -p "$BATS_TEST_TMPDIR/mods"
+  ln -s "$TNU_ROOT/modules/00-preflight.sh" "$BATS_TEST_TMPDIR/mods/00-preflight.sh"
+  cat >"$BATS_TEST_TMPDIR/mods/10-pk.sh" <<'MOD'
+register_module pk 10 0
+pk_applies() { return 0; }
+pk_apply() {
+  local bin="$HOME/tnu tool"
+  if [[ -e $bin ]]; then return 0; fi
+  backup_record pkg bin "$bin"
+  printf 'tool\n' >"$bin"
+  note_change "install $bin"
+}
+MOD
+  export TNU_MODULES_DIR="$BATS_TEST_TMPDIR/mods"
+  run_install -y
+  assert_success
+  assert_file_exists "$HOME/tnu tool"
+  run_install -y --uninstall
+  assert_success
+  assert_output --partial "uninstall with --purge to remove it"
+  assert_file_exists "$HOME/tnu tool"
+  [[ $(backup_count) == 0 ]]
+  run_install -y --uninstall --purge --dry-run
+  assert_success
+  assert_file_exists "$HOME/tnu tool"
+  run_install -y --uninstall --purge
+  assert_success
+  assert_file_not_exists "$HOME/tnu tool"
+  # Done for good: the restored backup has nothing left to replay.
+  run_install -y --uninstall --purge
+  assert_success
+  assert_output --partial "nothing to uninstall"
 }
 
 @test "uninstall after two runs with different content restores original" {

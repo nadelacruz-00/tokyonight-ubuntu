@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Stub: 'dpkg-query -W [-f=FMT] PKG' (PKG is the last arg). Succeeds, printing 'PKG<TAB>1.0',
 # iff $STUB_STATE/pkgs/PKG exists; else exit 1.
+# A FMT containing ${db:Status-Abbrev} is printed as real dpkg-query does (no
+# newline added; ${Package} and ${Version}=1.0 also expanded), the status being
+# the first line of $STUB_STATE/pkg-status/PKG, or 'ii ' (installed) when absent.
+# shellcheck disable=SC2016 # dpkg format fields are literal on purpose
 set -Eeuo pipefail
 shopt -s inherit_errexit
 IFS=$'\n\t'
@@ -9,6 +13,24 @@ args=""
 if (($#)); then args=$(printf '%q ' "$@"); fi
 printf '%s\t%s\n' "${0##*/}" "${args% }" >>"${STUB_LOG:-/dev/null}"
 pkg=""
-for a in "$@"; do pkg=$a; done
+fmt=""
+prev=""
+for a in "$@"; do
+  case $a in
+    -f=* | --showformat=*) fmt=${a#*=} ;;
+    *) if [[ $prev == -f || $prev == --showformat ]]; then fmt=$a; fi ;;
+  esac
+  prev=$a
+  pkg=$a
+done
 [[ -n $pkg && -e ${STUB_STATE:?}/pkgs/$pkg ]] || exit 1
+if [[ $fmt == *'${db:Status-Abbrev}'* ]]; then
+  status='ii '
+  if [[ -f $STUB_STATE/pkg-status/$pkg ]]; then IFS= read -r status <"$STUB_STATE/pkg-status/$pkg" || true; fi
+  out=${fmt//'${db:Status-Abbrev}'/$status}
+  out=${out//'${Package}'/$pkg}
+  out=${out//'${Version}'/1.0}
+  printf '%s' "$out"
+  exit 0
+fi
 printf '%s\t%s\n' "$pkg" 1.0

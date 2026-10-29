@@ -52,8 +52,9 @@ Options:
 
 Modules: ${mods% }
 
-Exit status: 0 ok, 1 a module failed, 2 usage error, 3 preflight failed,
-4 another install is running.
+Exit status: 0 ok, 1 a module failed (or the confirmation prompt was
+declined), 2 usage error, 3 preflight failed, 4 another install is running,
+130 interrupted.
 EOF
 }
 

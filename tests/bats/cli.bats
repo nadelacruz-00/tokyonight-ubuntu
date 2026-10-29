@@ -25,6 +25,8 @@ setup() {
     }
   done
   assert_output --partial "Usage: install.sh"
+  assert_output --partial "1 a module failed (or the confirmation prompt was"
+  assert_output --partial "declined)"
   [[ -z $stderr ]]
 }
 

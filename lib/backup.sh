@@ -138,6 +138,35 @@ backup_list() {
   printf '%s\n' "${dirs[@]}" | LC_ALL=C sort -r
 }
 
+# backup_restored_list: dirs in backups/.restored that still have rows not
+# replayed (deferred pkg rows, which --purge undoes), newest first.
+backup_restored_list() {
+  local root=${STATE_DIR:?STATE_DIR not set}/backups/.restored d dirs=()
+  [[ -d $root ]] || return 0
+  for d in "$root"/*/; do
+    d=${d%/}
+    if [[ -s $d/manifest.tsv ]] && backup_pending "$d"; then dirs+=("$d"); fi
+  done
+  ((${#dirs[@]})) || return 0
+  printf '%s\n' "${dirs[@]}" | LC_ALL=C sort -r
+}
+
+# backup_pending DIR: some non-empty manifest row of DIR is not yet in DIR/replayed.
+backup_pending() {
+  local line n=0
+  local -A seen=()
+  if [[ -f $1/replayed ]]; then
+    while IFS= read -r line; do
+      if [[ $line =~ ^[0-9]+$ ]]; then seen["$line"]=1; fi
+    done <"$1/replayed"
+  fi
+  while IFS= read -r line; do
+    n=$((n + 1))
+    if [[ -n $line && -z ${seen["$n"]:-} ]]; then return 0; fi
+  done <"$1/manifest.tsv"
+  return 1
+}
+
 # _split_tab LINE: split on every TAB (keeping empty fields) into the caller's F array.
 _split_tab() {
   local s=$1
@@ -405,7 +434,7 @@ _replay_dir() {
 _replay_pkg() {
   local purge=$2 kind=$3 name=$4
   if [[ $purge != 1 ]]; then
-    log_info "kept $kind $name (use --purge to remove)"
+    log_info "kept $kind $name (uninstall with --purge to remove it)"
     return 2
   fi
   case $kind in

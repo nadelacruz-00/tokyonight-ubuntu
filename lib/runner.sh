@@ -107,13 +107,29 @@ _tnu_kill_tree() {
   kill -CONT "$pid" 2>/dev/null || true
 }
 
+# _tnu_ppid PID: PID's parent pid (empty when PID is gone).
+_tnu_ppid() {
+  local line rest ppid
+  { IFS= read -r line <"/proc/$1/stat"; } 2>/dev/null || return 0
+  rest=${line##*) }
+  IFS=' ' read -r _ ppid _ <<<"$rest"
+  printf '%s\n' "$ppid"
+}
+
+# _tnu_kill_child PID: _tnu_kill_tree PID, but only while PID is still our
+# own child (a reaped PID may have been reused by an unrelated process).
+_tnu_kill_child() {
+  if [[ $(_tnu_ppid "$1") != "$BASHPID" ]]; then return 0; fi
+  _tnu_kill_tree "$1"
+}
+
 # _tnu_on_signal: INT/TERM handler: stop the running module, exit 130 (the
 # lock is released when this process exits).
 _tnu_on_signal() {
   trap '' INT TERM
   MODULE="" log_error "interrupted"
   if [[ -n $_TNU_CHILD ]]; then
-    _tnu_kill_tree "$_TNU_CHILD"
+    _tnu_kill_child "$_TNU_CHILD"
     wait "$_TNU_CHILD" 2>/dev/null || true
   fi
   exit 130
@@ -285,20 +301,24 @@ run_status() {
 # A fully replayed backup moves to backups/.restored/; the first one with rows
 # still pending is left in place and stops the run (older backups would
 # otherwise see our newer values as user edits), with TNU_RC=1.
+# With PURGE=1 (and no BACKUP_TS) the restored backups whose pkg rows were
+# deferred by an earlier plain --uninstall are replayed too, newest first;
+# DIR/replayed makes only those rows run. They stay in .restored.
 run_uninstall() {
   local d ts restored=$STATE_DIR/backups/.restored
-  local -a dirs=()
+  local -a dirs=() old=()
   TNU_RC=0
   if [[ -n ${BACKUP_TS:-} ]]; then
     dirs=("$STATE_DIR/backups/$BACKUP_TS")
   else
     mapfile -t dirs < <(backup_list)
+    if [[ ${PURGE:-0} == 1 ]]; then mapfile -t old < <(backup_restored_list); fi
   fi
-  if ((${#dirs[@]} == 0)); then
+  if ((${#dirs[@]} + ${#old[@]} == 0)); then
     log_info "nothing to uninstall"
     return 0
   fi
-  for d in "${dirs[@]}"; do
+  for d in "${dirs[@]}" "${old[@]}"; do
     ts=${d##*/}
     log_info "restoring backup $ts"
     if ! backup_replay "$d" "${PURGE:-0}"; then
@@ -308,7 +328,7 @@ run_uninstall() {
       TNU_RC=1
       return 0
     fi
-    if _dry; then continue; fi
+    if _dry || [[ $d == "$restored"/* ]]; then continue; fi
     (umask 077 && mkdir -p -- "$restored") || die "cannot create $restored"
     mv -T -- "$d" "$restored/$ts" || die "cannot move $d to $restored"
     log_info "restored backup $ts"
