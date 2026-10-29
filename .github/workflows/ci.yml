@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - run: make dev-deps
+      - run: make lint
+
+  pii:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      # No .pii-denylist in CI: the generic patterns only, tree and full history.
+      - run: python3 -I helpers/pii_scan.py --history .
+
+  unit:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gjs
+      - run: make test-py test-bats test-gjs
+
+  integration:
+    runs-on: ubuntu-24.04-arm
+    container: ubuntu:26.04
+    steps:
+      # checkout needs git in the container, or it falls back to a tarball without submodules
+      - run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - run: tests/integration/install-deps.sh tester
+      - name: integration (user level)
+        run: sudo -u tester env TNU_IN_CONTAINER=1 tests/integration/run.sh
+      - name: integration (--system)
+        run: sudo -u tester env TNU_IN_CONTAINER=1 tests/integration/run.sh --system
+
+  network:
+    runs-on: ubuntu-24.04-arm
+    container: ubuntu:26.04
+    continue-on-error: true
+    steps:
+      - run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - run: tests/integration/install-deps.sh tester
+      - run: apt-get update && apt-get install -y --no-install-recommends flatpak
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/tokyonight-ubuntu
+          key: tnu-downloads-${{ hashFiles('assets/checksums.sha256') }}
+      # run.sh uses a temp XDG_CACHE_HOME; TNU_IT_CACHE seeds it from (and saves
+      # new downloads to) the cached dir, which the tester user must reach.
+      - run: |
+          install -d -m 0777 "$HOME/.cache/tokyonight-ubuntu"
+          chmod a+x "$HOME" "$HOME/.cache"
+          chmod -R a+rw "$HOME/.cache/tokyonight-ubuntu"
+      - name: integration (real downloads, Rewaita from Flathub)
+        run: >-
+          sudo -u tester env TNU_IN_CONTAINER=1 TNU_REAL_REWAITA=1
+          TNU_IT_CACHE="$HOME/.cache/tokyonight-ubuntu"
+          tests/integration/run.sh --real-network

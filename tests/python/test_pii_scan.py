@@ -148,6 +148,29 @@ class PiiScanTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("email", out)
 
+    def test_history_diff_marker_is_not_a_local_part(self):
+        if shutil.which("git") is None:
+            self.skipTest("git missing")
+        import subprocess
+
+        def git(*a):
+            subprocess.run(
+                ["git", "-C", self.tmp, "-c", "user.name=T", "-c", "user.email=t@users.noreply.github.com", *a],
+                check=True,
+                capture_output=True,
+            )
+
+        git("init", "-q")
+        p = os.path.join(self.tmp, "t.py")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("@unittest.skipUnless(True, 'x')\ndef f():\n    pass\n")
+        git("add", "t.py")
+        git("commit", "-qm", "add")
+        os.remove(p)
+        git("commit", "-qam", "rm")
+        # in `git log -p` the +/- diff marker before a decorator is not a mail local part
+        self.assertEqual(scan("--history", self.tmp), (0, ""))
+
     def test_no_git_on_path(self):
         import subprocess
         import sys

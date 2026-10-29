@@ -2,10 +2,13 @@ SHELL := /usr/bin/env bash
 VENV := .venv-dev
 BIN := $(VENV)/bin
 BATS := tests/bats/bats-core/bin/bats
-SH_PATHS := $(wildcard install.sh lib modules tools tests/stubs tests/test_helper.bash)
+SH_PATHS := $(wildcard install.sh lib modules tools tests/stubs tests/test_helper.bash tests/integration)
 PY_PATHS := $(wildcard helpers tests/python)
 
-.PHONY: dev-deps lint pii test-bats test-py test test-integration test-container
+.PHONY: dev-deps lint pii test-bats test-py test-gjs test test-integration test-container
+
+CONTAINER := $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null)
+IMAGE := tokyonight-ubuntu-test
 
 dev-deps:
 	python3 -m venv $(VENV)
@@ -27,12 +30,19 @@ test-bats:
 test-py:
 	@if [ -d tests/python ]; then python3 -I -m unittest discover -s tests/python; else echo "test-py: no tests/python yet"; fi
 
-test: lint pii test-py test-bats
+test-gjs:
+	@if command -v gjs >/dev/null 2>&1; then gjs -m tests/gjs/theme-sync.test.js; \
+	else echo "test-gjs: skipped (gjs not installed)"; fi
 
+test: lint pii test-py test-bats test-gjs
+
+# Real install.sh + real dconf in a temp HOME on a private D-Bus (never the session's).
 test-integration:
-	@if [ -d tests/integration ]; then $(BATS) -r tests/integration; else echo "test-integration: none yet"; fi
+	@tests/integration/run.sh
 
+# The same in an Ubuntu 26.04 container, then with --system (root parts via sudo).
 test-container:
-	@if command -v podman >/dev/null 2>&1 || command -v docker >/dev/null 2>&1; then \
-	  echo "test-container: not implemented yet"; \
-	else echo "test-container: skipped (neither podman nor docker found)"; fi
+	@if [ -z "$(CONTAINER)" ]; then echo "test-container: skipped (neither podman nor docker found)"; exit 0; fi; \
+	$(CONTAINER) build -t $(IMAGE) -f tests/integration/Containerfile tests/integration && \
+	$(CONTAINER) run --rm -v "$(CURDIR):/src:ro" -w /src --user tester -e TNU_IN_CONTAINER=1 $(IMAGE) \
+	  bash -c 'tests/integration/run.sh && tests/integration/run.sh --system'

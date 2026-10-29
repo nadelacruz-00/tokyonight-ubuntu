@@ -177,6 +177,9 @@ def scan_history(root, denylist):
             continue
         if skip:
             continue
+        # Drop the diff marker (+, - or space): "+@decorator" is not a mailbox.
+        if line[:1] in ("+", "-", " "):
+            line = line[1:]
         for rule, ex in scan_line(line, cur, denylist):
             hits.append((f"history:{cur}", n, rule, ex))
     return hits
