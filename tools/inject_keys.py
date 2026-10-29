@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Press key combinations in the current GNOME session via Mutter RemoteDesktop.
 
-Used by tools/screenshots.sh --auto (Quick Settings, workspace switches, typing
-`exit` into the demo terminal).
+Used by tools/screenshots.sh --auto for global shortcuts only (Quick Settings,
+Escape on the empty workspace, workspace switches): never to type into a
+window, since keys go to whatever has focus.
 
-  tools/inject_keys.py ACCEL...   e.g. '<Super>s', Escape, or e x i t Return
+  tools/inject_keys.py ACCEL...   e.g. '<Super>s', Escape, '<Super>End'
 
 Each ACCEL is a GTK accelerator: modifiers in <>, then one key; its keys are
 pressed in order and released in reverse, one ACCEL after the other. Keys are

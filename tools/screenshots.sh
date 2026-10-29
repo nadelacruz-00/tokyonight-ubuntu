@@ -29,7 +29,7 @@
 # workspace 1 at the end), then every SHOT (default: all) in a fixed order:
 # desktop; overview (org.gnome.Shell OverviewActive); quick-settings (its keybinding, injected via
 # Mutter RemoteDesktop by tools/inject_keys.py, closed again with Escape);
-# ptyxis (demo window, closed by typing `exit`); osk (gjsosk's indicator
+# ptyxis (demo window, closed by TERM to its own shell); osk (gjsosk's indicator
 # keyboard-visible, back to its previous state). Each step checks that its state
 # is undone before the next one starts.
 # --with-storm (only with --auto) then switches the session to Tokyo Night
@@ -382,29 +382,22 @@ demo_wait_gone() {
   [[ -z $(demo_pids) ]]
 }
 
-# demo_cleanup [type]: close the demo terminal (also when a capture failed).
-# With "type" (--auto, right after the capture, while the demo window is the
-# focused window on the empty workspace) `exit` is typed into it; otherwise,
-# and as a fallback, its shell gets TERM (the zshrc exits 0 on it, so Ptyxis
-# closes the window), then KILL. Afterwards the Ptyxis dconf keys the window
-# changed (window-size, ...) are put back and the temp HOME is removed.
+# demo_cleanup: close the demo terminal (also when a capture failed). Only the
+# demo shell itself is signalled, never typed into (keys would go to whatever
+# window has focus): TERM (the zshrc exits 0 on it, so Ptyxis closes the
+# window), up to 3 s, then KILL; a shell that survives sets DEMO_LEFT.
+# Afterwards the Ptyxis dconf keys the window changed (window-size, ...) are
+# put back and the temp HOME is removed.
 DEMO_LEFT=0
 demo_cleanup() {
-  local how=${1:-} ran=0
+  local ran=0
   local -a pids
   if [[ -n $TMP_DEMO ]]; then
     mapfile -t pids < <(demo_pids)
     if ((${#pids[@]})); then
       ran=1
-      if [[ $how == type ]]; then
-        inject_keys e x i t Return || true
-        demo_wait_gone 30 || true
-        mapfile -t pids < <(demo_pids)
-      fi
-    fi
-    if ((${#pids[@]})); then
       demo_signal TERM "${pids[@]}"
-      if ! demo_wait_gone 20; then
+      if ! demo_wait_gone 30; then
         mapfile -t pids < <(demo_pids)
         if ((${#pids[@]})); then demo_signal KILL "${pids[@]}"; fi
         demo_wait_gone 10 || true
@@ -625,10 +618,18 @@ qs_open() {
   QS_OPEN=1
 }
 
+# qs_close: Escape closes the menu. If the menu did not open, Escape goes to
+# the focused window instead, so it is only ever sent while on the empty
+# workspace (no window there has focus): run_auto and cleanup close Quick
+# Settings before ws_leave switches back.
 qs_close() {
   if ((QS_OPEN)); then
     QS_OPEN=0
-    inject_keys Escape || echo "warning: could not close Quick Settings (press Escape)" >&2
+    if ((WS_MOVED)); then
+      inject_keys Escape || echo "warning: could not close Quick Settings (press Escape)" >&2
+    else
+      echo "warning: not on the empty workspace; Escape not sent (close Quick Settings yourself)" >&2
+    fi
   fi
   return 0
 }
@@ -760,7 +761,7 @@ auto_shot() {
   case $shot in
     overview) overview_close ;;
     quick-settings) qs_close ;;
-    ptyxis) demo_cleanup type ;;
+    ptyxis) demo_cleanup ;;
     osk) osk_close ;;
   esac
   assert_undone "$shot"

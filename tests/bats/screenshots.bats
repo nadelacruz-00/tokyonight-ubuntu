@@ -173,12 +173,10 @@ python3 -I -c 'import sys,zlib,struct
 def c(t,b): return struct.pack(">I",len(b))+t+b+struct.pack(">I",zlib.crc32(t+b)&0xffffffff)
 open(sys.argv[1],"wb").write(b"\x89PNG\r\n\x1a\n"+c(b"IHDR",struct.pack(">IIBBBBB",1,1,8,2,0,0,0))+c(b"IDAT",zlib.compress(b"\x00\xff\x00\x00"))+c(b"IEND",b""))' "$1"
 FAKE
-  # fake injector: logs; typing "e x i t Return" ends the fake demo shell
-  # (removes demo-alive) when TYPING_EXITS is set
+  # fake injector: logs only
   cat >"$BATS_TEST_TMPDIR/fake-inject" <<'INJ'
 #!/usr/bin/env bash
 printf 'inject\t%s\n' "$*" >>"$STUB_LOG"
-if [[ "$*" == "e x i t Return" && -n ${TYPING_EXITS:-} ]]; then rm -f "$BATS_TEST_TMPDIR/demo-alive"; fi
 INJ
   chmod +x "$BATS_TEST_TMPDIR/fake-capture" "$BATS_TEST_TMPDIR/fake-inject"
   export TNU_SHOT_CAPTURE="$BATS_TEST_TMPDIR/fake-capture" TNU_INJECT_KEYS="$BATS_TEST_TMPDIR/fake-inject"
@@ -300,7 +298,7 @@ OSKG='gsettings\t--schemadir .*gjsosk@vishram1123\.com/schemas'
   _live_source
   parse_args --auto osk quick-settings ptyxis overview desktop
   : >"$BATS_TEST_TMPDIR/demo-alive"
-  export TYPING_EXITS=1
+  export TERM_EXITS=1
   run_auto
   _assert_order '^countdown\t10$' \
     '^gsettings\tget org\.gnome\.mutter dynamic-workspaces$' \
@@ -312,14 +310,17 @@ OSKG='gsettings\t--schemadir .*gjsosk@vishram1123\.com/schemas'
     '^gsettings\tget org\.gnome\.shell\.keybindings toggle-quick-settings$' \
     '^inject\t<Super>s$' '^pause\t1$' '^capture\tquick-settings\.png$' '^inject\tEscape$' \
     '^pause\t4$' '^capture\tptyxis-tokyonight\.png$' \
-    '^inject\te x i t Return$' \
+    '^signal\tTERM 4242$' \
     "^$OSKG get org\.gnome\.shell\.extensions\.gjsosk\.indicator keyboard-visible$" \
     "^$OSKG set org\.gnome\.shell\.extensions\.gjsosk\.indicator keyboard-visible true$" \
     '^pause\t1\.5$' '^capture\tosk\.png$' \
     "^$OSKG set org\.gnome\.shell\.extensions\.gjsosk\.indicator keyboard-visible false$" \
     '^inject\t<Super>Home$'
-  refute_stub_called signal
+  refute_stub_called signal 'KILL'
   refute_stub_called gsettings '.*opened'
+  # only global shortcuts are injected, nothing is typed into a window
+  run grep -v -E $'^inject\t(<Super>End|<Super>s|Escape|<Super>Home)$' <(grep '^inject' "$STUB_LOG")
+  assert_output ""
   [[ $WS_MOVED == 0 ]]
   run grep -c '^countdown' "$STUB_LOG"
   assert_output 1
@@ -445,27 +446,26 @@ OSKG='gsettings\t--schemadir .*gjsosk@vishram1123\.com/schemas'
   rm -rf "$TMP_DEMO"
 }
 
-@test "demo close: exit typed into the demo shell first, no signal needed" {
-  _live_env
-  _live_source
-  parse_args --auto ptyxis
-  : >"$BATS_TEST_TMPDIR/demo-alive"
-  export TYPING_EXITS=1
-  run_auto
-  _assert_order '^capture\tptyxis-tokyonight\.png$' '^inject\te x i t Return$'
-  refute_stub_called signal
-  [[ $DEMO_LEFT == 0 && -z $TMP_DEMO ]]
-}
-
-@test "demo close: TERM as a fallback when typing exit did not end the shell" {
+@test "demo close: TERM to the demo shell only, nothing typed into any window" {
   _live_env
   _live_source
   parse_args --auto ptyxis
   : >"$BATS_TEST_TMPDIR/demo-alive"
   export TERM_EXITS=1
   run_auto
-  _assert_order '^inject\te x i t Return$' '^signal\tTERM 4242$'
+  _assert_order '^capture\tptyxis-tokyonight\.png$' '^signal\tTERM 4242$' '^inject\t<Super>Home$'
   refute_stub_called signal 'KILL'
+  refute_stub_called inject '.*(Return|e x i t)'
+  [[ $DEMO_LEFT == 0 && -z $TMP_DEMO ]]
+}
+
+@test "Quick Settings: Escape only while on the empty workspace" {
+  _live_source
+  QS_OPEN=1 WS_MOVED=0
+  inject_keys() { echo "INJECTED $*"; }
+  run qs_close
+  assert_output --partial "Escape not sent"
+  refute_output --partial "INJECTED"
 }
 
 @test "demo close: a shell that survives TERM and KILL stops the run" {
@@ -476,7 +476,7 @@ OSKG='gsettings\t--schemadir .*gjsosk@vishram1123\.com/schemas'
   run run_auto
   assert_failure 1
   assert_output --partial "the demo terminal did not close"
-  assert_stub_called signal 'KILL 4242'
+  _assert_order '^signal\tTERM 4242$' '^signal\tKILL 4242$'
   refute_stub_called capture 'osk\.png'
 }
 
