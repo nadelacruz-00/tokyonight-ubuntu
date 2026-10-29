@@ -304,16 +304,21 @@ capture_into() {
 
 # capture DEST SHOT: capture into a temp file next to DEST; DEST is replaced
 # only by a non-empty new image, so a failed capture keeps the old file.
+# CAP_TMP: the temp file of the capture in progress (removed by cleanup).
+CAP_TMP=""
 capture() {
-  local dest=$1 shot=$2 tmp
+  local dest=$1 shot=$2
   if [[ -n ${TNU_SHOT_CAPTURE:-} ]]; then check_test_hook; fi
   mkdir -p "$SHOT_DIR"
-  tmp=$(mktemp --suffix=.png "$SHOT_DIR/.$shot.XXXXXX")
-  if capture_into "$tmp" "$shot" "$dest" && [[ -s $tmp ]]; then
-    mv -f -- "$tmp" "$dest"
+  CAP_TMP=$(mktemp --suffix=.png "$SHOT_DIR/.$shot.XXXXXX")
+  if capture_into "$CAP_TMP" "$shot" "$dest" && [[ -s $CAP_TMP ]]; then
+    chmod 0644 -- "$CAP_TMP" # mktemp creates 0600
+    mv -f -- "$CAP_TMP" "$dest"
+    CAP_TMP=""
     return 0
   fi
-  rm -f -- "$tmp"
+  rm -f -- "$CAP_TMP"
+  CAP_TMP=""
   return 1
 }
 
@@ -340,6 +345,7 @@ postprocess() {
   local f=$1
   shrink "$f"
   python3 -I "$ROOT/helpers/png_strip.py" "$f"
+  chmod 0644 -- "$f" # png_strip rewrites it with the umask's mode
 }
 
 # --- shot setup -----------------------------------------------------------------
@@ -644,6 +650,7 @@ IN_CLEANUP=0
 cleanup() {
   trap '' INT TERM HUP
   IN_CLEANUP=1
+  if [[ -n $CAP_TMP ]]; then rm -f -- "$CAP_TMP" || true; fi
   overview_close || true
   qs_close || true
   osk_close || true

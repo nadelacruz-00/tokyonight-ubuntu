@@ -452,6 +452,10 @@ _assert_storm_restored() {
   assert_failure 130
   assert_output --partial "sha256 verified"
   _assert_storm_restored
+  # the interrupted capture's temp file is gone, the earlier shot is 0644
+  run find "$SHOT_DIR" -name '.desktop*'
+  assert_output ""
+  [[ $(stat -c %a "$SHOT_DIR/desktop-tokyonight.png") == 644 ]]
 }
 
 @test "--with-storm: an INT arriving during the restore does not cut it short" {
