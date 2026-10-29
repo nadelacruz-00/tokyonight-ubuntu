@@ -10,6 +10,15 @@ setup() {
   lib_setup
 }
 
+@test "backup_file without a row creates no manifest and nothing to list" {
+  echo x >"$HOME/f"
+  run --separate-stderr libsh 'backup_file "$HOME/f"; backup_list'
+  assert_success
+  assert_output ""
+  assert_file_exists "$BACKUP/files/1"
+  assert_file_not_exists "$BACKUP/manifest.tsv"
+}
+
 @test "no rows means no backup dir" {
   echo same >"$HOME/f"
   echo same >"$BATS_TEST_TMPDIR/src"
@@ -37,19 +46,61 @@ setup() {
   assert_output $'dconf\t/org/x/a\tUNSET\t\'v w\''
 }
 
-@test "append after a torn row starts a new line" {
+@test "append after a torn row poisons it with TORN and starts a new line" {
   run --separate-stderr libsh 'backup_record dir "$HOME/one"'
   printf 'file\t/torn' >>"$BACKUP/manifest.tsv"
   run --separate-stderr libsh 'backup_record dir "$HOME/two"'
-  run tail -n 1 "$BACKUP/manifest.tsv"
-  assert_output "$(printf 'dir\t%s' "$HOME/two")"
+  run tail -n 2 "$BACKUP/manifest.tsv"
+  assert_line --index 0 $'file\t/torn\tTORN'
+  assert_line --index 1 "$(printf 'dir\t%s' "$HOME/two")"
+}
+
+@test "a torn well-formed pkg row is never replayed, even with purge" {
+  mkdir -p "$HOME/.local/share"
+  echo precious >"$HOME/.local/share/data"
+  # Even with a dir row for it (so only the TORN poison protects it).
+  run --separate-stderr libsh 'backup_record dir "$HOME/.local"'
+  # Crash mid-write: the cut-off row happens to have the right field count.
+  printf 'pkg\tfontdir\t%s' "$HOME/.local" >>"$BACKUP/manifest.tsv"
+  run --separate-stderr libsh 'backup_record pkg bin "$HOME/nonexistent-bin"'
+  run --separate-stderr libsh 'backup_replay "$BACKUP" 1'
+  assert_success
+  [[ $stderr == *"torn row"* ]]
+  assert_file_exists "$HOME/.local/share/data"
+}
+
+@test "purge removes only dirs this manifest created" {
+  mkdir -p "$HOME/.local/share/fonts/JetBrainsMonoNerd"
+  echo user >"$HOME/.local/share/fonts/JetBrainsMonoNerd/user.ttf"
+  run --separate-stderr libsh 'backup_record pkg fontdir "$HOME/.local/share/fonts/JetBrainsMonoNerd"'
+  run --separate-stderr libsh 'backup_replay "$BACKUP" 1'
+  assert_success
+  [[ $stderr == *"not created by this install"* ]]
+  assert_file_exists "$HOME/.local/share/fonts/JetBrainsMonoNerd/user.ttf"
+}
+
+@test "backup copies and atomic_write temp files are fsynced" {
+  printf '#!/usr/bin/env bash\nprintf "sync\\t%%s\\n" "$*" >>"$STUB_LOG"\nexec /usr/bin/sync "$@"\n' >"$BATS_TEST_TMPDIR/bin/sync"
+  chmod +x "$BATS_TEST_TMPDIR/bin/sync"
+  echo orig >"$HOME/f"
+  echo new >"$BATS_TEST_TMPDIR/src"
+  run --separate-stderr libsh 'install_file "$BATS_TEST_TMPDIR/src" "$HOME/f"'
+  assert_success
+  assert_stub_called sync '-- .*/files/1$'
+  assert_stub_called sync '-- .*/\.tnu\.tmp\.'
+  assert_stub_called sync '-- .*/manifest\.tsv$'
 }
 
 @test "backup_list prints backup dirs newest first, excluding .restored" {
   local b=$STATE_DIR/backups
-  mkdir -p "$b/20261029T000001Z" "$b/20261029T000003Z" "$b/20261029T000002Z" "$b/.restored/20261029T000000Z"
-  touch "$b/20261029T000001Z/manifest.tsv" "$b/20261029T000003Z/manifest.tsv" \
-    "$b/20261029T000002Z/manifest.tsv" "$b/.restored/20261029T000000Z/manifest.tsv"
+  mkdir -p "$b/20261029T000001Z" "$b/20261029T000003Z" "$b/20261029T000002Z" "$b/.restored/20261029T000000Z" \
+    "$b/20261029T000004Z" "$b/20261029T000005Z"
+  local d
+  for d in 20261029T000001Z 20261029T000003Z 20261029T000002Z .restored/20261029T000000Z; do
+    printf 'dir\t/x\n' >"$b/$d/manifest.tsv"
+  done
+  # 000004Z: empty manifest, 000005Z: none (backup_file without a row) -> not listed.
+  : >"$b/20261029T000004Z/manifest.tsv"
   run --separate-stderr libsh backup_list
   assert_success
   assert_output "$(printf '%s\n' "$b/20261029T000003Z" "$b/20261029T000002Z" "$b/20261029T000001Z")"
@@ -214,8 +265,10 @@ setup() {
   run --separate-stderr libsh 'backup_record block "$HOME/.zshrc" 1
     backup_record line "$HOME/.config/x" "^theme " ABSENT "theme \"tokyonight\""
     backup_replay "$BACKUP"'
-  assert_success
+  # Pending until lib/edit.sh provides the handlers: not reported as done.
+  assert_failure
   [[ $stderr == *"unsupported row type"* ]]
+  assert_file_not_exists "$BACKUP/replayed"
 }
 
 @test "replay dispatches a row type to _replay_<type>" {
@@ -264,4 +317,74 @@ setup() {
   run --separate-stderr env SYSTEM=1 bash -c 'source "$TNU_ROOT/tests/lib_loader.bash"; backup_replay "$BACKUP"'
   assert_success
   assert_file_contains "$p" '^original$'
+}
+
+@test "replay without --system finishes user rows, later --system finishes the rest" {
+  stub_enable sudo update-alternatives
+  echo orig >"$HOME/f.css"
+  echo new >"$BATS_TEST_TMPDIR/src"
+  dconf_put /org/x/k "'old'"
+  local p="$SYS_ROOT/usr/share/tnu/theme.gresource"
+  mkdir -p "${p%/*}"
+  echo built >"$p"
+  run --separate-stderr env P="$p" bash -c 'source "$TNU_ROOT/tests/lib_loader.bash"
+    install_file "$BATS_TEST_TMPDIR/src" "$HOME/f.css"
+    dset /org/x/k "'"'"'new'"'"'"
+    backup_record sysfile "$P" ABSENT "$(sha256_of "$P")"
+    backup_record alt gdm-theme.gresource /usr/share/tnu/theme.gresource'
+  assert_success
+  run --separate-stderr libsh 'backup_replay "$BACKUP"'
+  assert_failure
+  [[ $stderr == *"--system"* ]]
+  assert_file_contains "$HOME/f.css" '^orig$'
+  run dconf_get /org/x/k
+  assert_output "'old'"
+  assert_file_exists "$p"
+  refute_stub_called sudo
+  # The user changes the restored file and setting before the --system replay.
+  echo user >"$HOME/f.css"
+  dconf_put /org/x/k "'user'"
+  : >"$STUB_LOG"
+  run --separate-stderr env SYSTEM=1 bash -c 'source "$TNU_ROOT/tests/lib_loader.bash"; backup_replay "$BACKUP"'
+  assert_success
+  [[ $stderr != *kept* ]]
+  [[ $stderr != *"$HOME/f.css"* ]]
+  assert_file_contains "$HOME/f.css" '^user$'
+  run dconf_get /org/x/k
+  assert_output "'user'"
+  refute_stub_called dconf 'write|reset'
+  assert_file_not_exists "$p"
+  assert_stub_called sudo '-- update-alternatives --remove gdm-theme.gresource'
+  # Everything done: a third replay is a no-op that succeeds.
+  : >"$STUB_LOG"
+  run --separate-stderr env SYSTEM=1 bash -c 'source "$TNU_ROOT/tests/lib_loader.bash"; backup_replay "$BACKUP"'
+  assert_success
+  refute_stub_called sudo
+}
+
+@test "pkg rows deferred without purge do not fail the replay and purge later" {
+  mkdir -p "$HOME/.local/bin"
+  echo bin >"$HOME/.local/bin/tool"
+  run --separate-stderr libsh 'backup_record pkg bin "$HOME/.local/bin/tool"; backup_replay "$BACKUP"'
+  assert_success
+  assert_file_exists "$HOME/.local/bin/tool"
+  run --separate-stderr libsh 'backup_replay "$BACKUP" 1'
+  assert_success
+  assert_file_not_exists "$HOME/.local/bin/tool"
+}
+
+@test "created dir in a non-writable parent needs --system to remove" {
+  stub_enable sudo
+  local parent="$SYS_ROOT/usr/share/gnome-shell/theme"
+  mkdir -p "$parent"
+  run --separate-stderr env P="$parent/tokyonight-ubuntu" bash -c 'source "$TNU_ROOT/tests/lib_loader.bash"
+    backup_record dir "$P"'
+  mkdir "$parent/tokyonight-ubuntu"
+  chmod 555 "$parent"
+  run --separate-stderr libsh 'backup_replay "$BACKUP"'
+  local st=$status err=$stderr
+  run --separate-stderr env SYSTEM=1 bash -c 'source "$TNU_ROOT/tests/lib_loader.bash"; backup_replay "$BACKUP"'
+  chmod 755 "$parent"
+  [[ $st == 1 && $err == *"--system"* ]]
+  assert_stub_called sudo '-- rmdir -- .*/theme/tokyonight-ubuntu$'
 }

@@ -274,3 +274,34 @@ checksums() {
   assert_line --index 1 "$(printf 'dir\t%s' "$HOME/.config/gtk 3.0")"
   assert_line --index 2 "$(printf 'file\t%s' "$HOME/.config/gtk 3.0/gtk.css")"
 }
+
+@test "download_verified in dry-run without a cached copy returns 10 and downloads nothing" {
+  printf 'payload' >"$STUB_STATE/downloads/pkg.tar.xz"
+  checksums pkg.tar.xz "$(sha256sum <"$STUB_STATE/downloads/pkg.tar.xz" | cut -d' ' -f1)" https://example.invalid/pkg.tar.xz
+  run --separate-stderr env DRY_RUN=1 bash -c 'source "$TNU_ROOT/tests/lib_loader.bash"
+    st=0; p=$(download_verified pkg.tar.xz) || st=$?
+    echo "st=$st p=$p const=$TNU_DRY_NOT_CACHED"'
+  assert_success
+  assert_output "st=10 p= const=10"
+  [[ $stderr == *"[dry-run] "*"download pkg.tar.xz from https://example.invalid/pkg.tar.xz"* ]]
+  refute_stub_called curl
+  assert_dir_not_exists "$CACHE_DIR"
+}
+
+@test "download_verified in dry-run with a valid cached copy returns its path" {
+  mkdir -p "$CACHE_DIR"
+  printf 'payload' >"$CACHE_DIR/pkg.tar.xz"
+  checksums pkg.tar.xz "$(sha256sum <"$CACHE_DIR/pkg.tar.xz" | cut -d' ' -f1)" https://example.invalid/pkg.tar.xz
+  run --separate-stderr env DRY_RUN=1 bash -c 'source "$TNU_ROOT/tests/lib_loader.bash"; download_verified pkg.tar.xz'
+  assert_success
+  assert_output "$CACHE_DIR/pkg.tar.xz"
+}
+
+@test "atomic_write with an invalid mode fails even in an if context" {
+  run --separate-stderr libsh 'if echo x | atomic_write "$HOME/f" 999; then echo wrote; else echo refused; fi
+    if echo x | write_file "$HOME/g" 9; then echo wrote; else echo refused; fi'
+  assert_output $'refused\nrefused'
+  [[ $stderr == *"invalid file mode: 999"* ]]
+  assert_file_not_exists "$HOME/f"
+  assert_file_not_exists "$HOME/g"
+}

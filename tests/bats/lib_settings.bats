@@ -86,21 +86,57 @@ K=/org/gnome/desktop/interface/color-scheme
   [[ $stderr == *"[dry-run]"* ]]
 }
 
+# gvs TEXT...: print gv_str of each TEXT, one per line (texts passed via env).
+gvs() {
+  local i=0 a
+  for a in "$@"; do
+    export "GV_$i=$a"
+    i=$((i + 1))
+  done
+  export GV_N=$i
+  run --separate-stderr libsh 'for ((i = 0; i < GV_N; i++)); do v="GV_$i"; gv_str "${!v}"; done'
+}
+
 @test "gv_str escapes apostrophe and backslash" {
-  run --separate-stderr libsh "gv_str \"Synthwave '84\"; gv_str 'a\\b'; gv_str ''"
+  # GLib's canonical print form (what `dconf read` returns): double quotes when
+  # the text contains an apostrophe, else single quotes.
+  gvs "Synthwave '84" 'a\b' '' "say \"hi\" it's" "back\\'q" plain
   assert_success
-  assert_line --index 0 "'Synthwave \\'84'"
+  assert_line --index 0 "\"Synthwave '84\""
   assert_line --index 1 "'a\\\\b'"
   assert_line --index 2 "''"
+  assert_line --index 3 "\"say \\\"hi\\\" it's\""
+  assert_line --index 4 "\"back\\\\'q\""
+  assert_line --index 5 "'plain'"
+}
+
+@test "gv_str escapes control and format characters like GLib under LANG=C" {
+  export LANG=C LC_ALL=C
+  gvs $'tab\there' $'zwj‍x' "Tokyonight Storm 🌪️" $'c\x01' $'nl\n'
+  assert_success
+  assert_line --index 0 "'tab\\there'"
+  assert_line --index 1 "'zwj\\u200dx'"
+  assert_line --index 2 "'Tokyonight Storm 🌪️'"
+  assert_line --index 3 "'c\\u0001'"
+  assert_line --index 4 "'nl\\n'"
 }
 
 @test "gv_str value round-trips through dset and replay" {
   dconf_put /org/x/name "'old'"
-  run --separate-stderr libsh 'dset /org/x/name "$(gv_str "Synthwave '"'"'84")"'
+  export TXT="Synthwave '84"
+  run --separate-stderr libsh 'dset /org/x/name "$(gv_str "$TXT")"'
   assert_success
   run dconf_get /org/x/name
-  assert_output "'Synthwave \\'84'"
+  assert_output "\"Synthwave '84\""
+  run cut -f4 "$BACKUP/manifest.tsv"
+  assert_output "\"Synthwave '84\""
+  # Second run: the canonical value already matches, so nothing changes.
+  run --separate-stderr libsh 'dset /org/x/name "$(gv_str "$TXT")"; module_changes test'
+  assert_output 1
+  run grep -c . "$BACKUP/manifest.tsv"
+  assert_output 1
   run --separate-stderr libsh 'backup_replay "$BACKUP"'
+  assert_success
   run dconf_get /org/x/name
   assert_output "'old'"
 }
@@ -124,4 +160,62 @@ K=/org/gnome/desktop/interface/color-scheme
   assert_success
   refute_stub_called dbus-run-session
   [[ $stderr != *"no session bus"* ]]
+}
+
+@test "dset records dconf's canonical read-back and replay restores it" {
+  dconf_put /org/x/l "['old']"
+  export V1="['a','b']" V2="['a', 'b']"
+  run --separate-stderr libsh 'dset /org/x/l "$V1"'
+  assert_success
+  [[ $stderr == *"dconf stores /org/x/l as ['a', 'b']"* ]]
+  run cat "$BACKUP/manifest.tsv"
+  assert_line --index 0 "$(printf 'dconf\t/org/x/l\t%s\t%s' "['old']" "$V1")"
+  assert_line --index 1 "$(printf 'dconf\t/org/x/l\t%s\t%s' "['old']" "$V2")"
+  # The canonical spelling compares equal on the next run.
+  run --separate-stderr libsh 'dset /org/x/l "$V2"; module_changes test'
+  assert_output 1
+  run --separate-stderr libsh 'backup_replay "$BACKUP"'
+  assert_success
+  [[ $stderr != *kept* ]]
+  run dconf_get /org/x/l
+  assert_output "['old']"
+}
+
+@test "dset and replay against real dconf on a private bus" {
+  if ! PATH=/usr/bin:/bin command -v dconf >/dev/null ||
+    ! PATH=/usr/bin:/bin command -v dbus-run-session >/dev/null ||
+    ! PATH=/usr/bin:/bin command -v dbus-daemon >/dev/null; then
+    skip "real dconf / dbus-run-session not installed"
+  fi
+  local t="$BATS_TEST_TMPDIR/realhome"
+  mkdir -p "$t/run"
+  chmod 700 "$t/run"
+  cat >"$BATS_TEST_TMPDIR/real.sh" <<'SH'
+source "$TNU_ROOT/tests/lib_loader.bash"
+k=/org/tokyonight-ubuntu-test/name
+l=/org/tokyonight-ubuntu-test/list
+dconf write "$k" "'before'"
+dset "$k" "$(gv_str "Synthwave '84")"
+dset "$k" "$(gv_str "Synthwave '84")"
+dset "$l" "['a','b']"
+dset "$l" "['a', 'b']"
+echo "changes=$(module_changes test)"
+echo "now=$(dget "$k")"
+echo "nowlist=$(dget "$l")"
+backup_replay "$STATE_DIR/backups/$RUN_ID"
+echo "after=$(dget "$k")"
+echo "list=$(dget "$l")"
+SH
+  # Private bus, temp HOME and runtime dir: the real session is never touched.
+  run --separate-stderr env -u DBUS_SESSION_BUS_ADDRESS HOME="$t" XDG_CONFIG_HOME="$t/.config" \
+    XDG_RUNTIME_DIR="$t/run" STATE_DIR="$t/state" PATH=/usr/bin:/bin \
+    dbus-run-session -- bash "$BATS_TEST_TMPDIR/real.sh"
+  assert_success
+  assert_line 'changes=2'
+  assert_line "now=\"Synthwave '84\""
+  assert_line "nowlist=['a', 'b']"
+  assert_line "after='before'"
+  assert_line 'list='
+  [[ $stderr != *kept* ]]
+  assert_file_exists "$t/.config/dconf/user"
 }

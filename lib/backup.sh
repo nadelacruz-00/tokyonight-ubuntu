@@ -16,9 +16,10 @@
 #
 # Row TYPE is replayed by the function `_replay_TYPE DIR PURGE FIELD...`
 # (DIR = backup dir, FIELD... = the row's fields after TYPE). Handlers may be
-# defined in any sourced file. They run in an `if` context, so errexit is off
-# inside them: check every command and `return 1` on failure. Use `run` /
-# `as_root` for changes so dry-run is honoured.
+# defined in any sourced file. They run in an `||` context, so errexit is off
+# inside them: check every command and `return 1` on failure (2 = deferred, see
+# backup_replay). Use `run` / `as_root` / `dconf_run` so dry-run is honoured.
+# Rows whose last field is TORN were cut by a crash and are never replayed.
 #
 # Drift rule: file/sysfile/dconf/line rows restore only when the current value
 # still equals the one we installed; otherwise log_warn "kept X (changed since install)".
@@ -26,22 +27,26 @@
 # Sourced, never executed; safe to source twice; sets no shell options.
 # Globals read: STATE_DIR RUN_ID DRY_RUN SYSTEM HOME SYS_ROOT.
 
-# backup_dir: create (on first use) and echo this run's backup dir.
+# backup_dir: create (on first use) and echo this run's backup dir. manifest.tsv
+# appears with the first row, so a dir without rows is never listed or replayed.
 backup_dir() {
   local d=${STATE_DIR:?STATE_DIR not set}/backups/${RUN_ID:?RUN_ID not set}
-  if [[ ! -f $d/manifest.tsv ]]; then
-    (umask 077 && mkdir -p -- "$d" && : >>"$d/manifest.tsv") || die "cannot create backup dir $d"
+  if [[ ! -d $d ]]; then
+    (umask 077 && mkdir -p -- "$d") || die "cannot create backup dir $d"
   fi
   printf '%s\n' "$d"
 }
 
 # _backup_append FILE LINE: append LINE (+ newline) and sync. A torn last line
-# (no trailing newline, e.g. after SIGKILL) is terminated first so it stays
-# isolated and is skipped on replay.
+# (no trailing newline, e.g. after SIGKILL) is first terminated with a poison
+# field, TAB TORN, so it can never be read back as a well-formed row.
 _backup_append() {
   local f=$1 line=$2
+  if [[ ! -e $f ]]; then
+    (umask 077 && : >>"$f") || return 1
+  fi
   if [[ -s $f && -n $(tail -c 1 -- "$f") ]]; then
-    printf '\n' >>"$f" || return 1
+    printf '\tTORN\n' >>"$f" || return 1
   fi
   printf '%s\n' "$line" >>"$f" || return 1
   # Best effort: the row is already appended; a failed fsync must not abort the run.
@@ -63,13 +68,14 @@ backup_record() {
       die "backup_record: $1 field contains a tab or newline: ${f//[$'\t\n']/?}"
     fi
   done
+  if [[ ${!#} == TORN ]]; then die "backup_record: last field may not be TORN"; fi
   if _dry; then return 0; fi
   dir=$(backup_dir) || exit 1
   _backup_append "$dir/manifest.tsv" "$(_join_tab "$@")" || die "cannot write $dir/manifest.tsv"
 }
 
-# backup_copy PATH: copy PATH into this run's files/N and echo "files/N",
-# or echo ABSENT when PATH does not exist. Symlinks are copied as symlinks.
+# backup_copy PATH: copy PATH into this run's files/N (fsynced) and echo
+# "files/N", or echo ABSENT when PATH does not exist. Symlinks stay symlinks.
 backup_copy() {
   local path=$1 dir n=1
   _abs_path "$path"
@@ -82,15 +88,18 @@ backup_copy() {
   (umask 077 && mkdir -p -- "$dir/files") || die "cannot create $dir/files"
   while [[ -e $dir/files/$n || -L $dir/files/$n ]]; do n=$((n + 1)); done
   cp -P --preserve=mode,timestamps -- "$path" "$dir/files/$n" || die "cannot back up $path"
+  if [[ ! -L $dir/files/$n ]]; then
+    sync -- "$dir/files/$n" || die "cannot sync backup of $path"
+  fi
   printf 'files/%s\n' "$n"
 }
 
 # _backup_index_get DIR PATH: echo the files/N|ABSENT ref already taken for PATH this run.
 _backup_index_get() {
-  local p r
+  local p r rest
   [[ -f $1/files.idx ]] || return 1
-  while IFS=$'\t' read -r p r; do
-    if [[ $p == "$2" ]]; then
+  while IFS=$'\t' read -r p r rest; do
+    if [[ $p == "$2" && -z $rest && $r =~ ^(files/[0-9]+|ABSENT)$ ]]; then
       printf '%s\n' "$r"
       return 0
     fi
@@ -116,13 +125,13 @@ backup_file() {
   if [[ -n $sha ]]; then backup_record file "$path" "$ref" "$sha"; fi
 }
 
-# backup_list: backup dirs (with a manifest) newest first, excluding .restored.
+# backup_list: backup dirs with a non-empty manifest, newest first, excluding .restored.
 backup_list() {
   local root=${STATE_DIR:?STATE_DIR not set}/backups d dirs=()
   [[ -d $root ]] || return 0
   for d in "$root"/*/; do
     d=${d%/}
-    if [[ ${d##*/} != .restored && -f $d/manifest.tsv ]]; then dirs+=("$d"); fi
+    if [[ ${d##*/} != .restored && -s $d/manifest.tsv ]]; then dirs+=("$d"); fi
   done
   ((${#dirs[@]})) || return 0
   printf '%s\n' "${dirs[@]}" | LC_ALL=C sort -r
@@ -150,47 +159,96 @@ _backup_row_arity() {
   esac
 }
 
+# _replay_mark DIR LINENO: remember that manifest line LINENO is undone.
+_replay_mark() {
+  if _dry; then return 0; fi
+  _backup_append "$1/replayed" "$2" || log_warn "cannot write $1/replayed"
+}
+
 # backup_replay DIR [PURGE=0]: undo DIR's manifest rows, newest first.
-# Returns 1 if any row could not be replayed (others are still attempted).
+# Each undone row's line number is appended to DIR/replayed, and rows listed
+# there are skipped, so a partial replay (e.g. system rows without --system)
+# can be finished later without touching the rows already undone.
+# Handler status: 0 = done (recorded), 1 = failed / still pending,
+# 2 = deliberately deferred (pkg without PURGE: not recorded, not a failure).
+# Returns 0 only when every row is done or deferred; else 1.
 backup_replay() {
-  local dir=${1:?backup_replay: DIR required} purge=${2:-0} m line type want seen_key i rc=0
-  local -a rows=() F=()
-  local -A _replay_seen=() _replay_pkg_paths=()
+  local dir=${1:?backup_replay: DIR required} purge=${2:-0} m line type want key i n st rc=0
+  local -a rows=() nums=() F=()
+  local -A _replay_seen=() _replay_pkg_paths=() _replay_dir_paths=() _replay_done=() _replay_dconf_old=()
   m=$dir/manifest.tsv
   if [[ ! -f $m ]]; then
     log_error "no manifest in $dir"
     return 1
   fi
   # A torn last line (no newline) is never read: its change never happened.
+  n=0
   while IFS= read -r line; do
-    if [[ -n $line ]]; then rows+=("$line"); fi
+    n=$((n + 1))
+    if [[ -n $line ]]; then
+      rows+=("$line")
+      nums+=("$n")
+    fi
   done <"$m"
+  if [[ -f $dir/replayed ]]; then
+    while IFS= read -r line; do
+      if [[ $line =~ ^[0-9]+$ ]]; then _replay_done["$line"]=1; fi
+    done <"$dir/replayed"
+  fi
   for line in "${rows[@]}"; do
     _split_tab "$line"
-    if [[ ${F[0]} == pkg && ${#F[@]} -eq 3 && -n ${F[2]} ]]; then _replay_pkg_paths["${F[2]}"]=1; fi
+    if [[ ${F[-1]} == TORN || ${#F[@]} -lt 2 ]]; then continue; fi
+    if [[ ${F[0]} == pkg && ${#F[@]} -eq 3 ]]; then _replay_pkg_paths["${F[2]}"]=1; fi
+    if [[ ${F[0]} == dir && ${#F[@]} -eq 2 ]]; then _replay_dir_paths["${F[1]}"]=1; fi
   done
   for ((i = ${#rows[@]} - 1; i >= 0; i--)); do
+    n=${nums[i]}
     _split_tab "${rows[i]}"
     type=${F[0]}
     want=$(_backup_row_arity "$type")
-    if [[ ! $type =~ ^[a-z]+$ || ($want != any && $want != $((${#F[@]} - 1))) || -z ${F[1]:-} ]]; then
-      log_warn "skipping malformed row in $m: ${rows[i]//$'\t'/ | }"
+    if [[ ${F[-1]} == TORN ]]; then
+      log_warn "skipping torn row $n in $m"
+      _replay_mark "$dir" "$n"
       continue
     fi
-    # A path written twice in one run shares one original: only its newest row counts.
-    if [[ $type == file || $type == sysfile ]]; then
-      seen_key="$type ${F[1]}"
-      if [[ -n ${_replay_seen["$seen_key"]:-} ]]; then continue; fi
-      _replay_seen["$seen_key"]=1
+    if [[ ! $type =~ ^[a-z]+$ || ($want != any && $want != $((${#F[@]} - 1))) || -z ${F[1]:-} ]]; then
+      log_warn "skipping malformed row $n in $m: ${rows[i]//$'\t'/ | }"
+      _replay_mark "$dir" "$n"
+      continue
     fi
+    # Superseded rows (bookkeeping runs even for rows already undone):
+    # - a path written twice in one run shares one original: only its newest row counts;
+    # - dset's pre-write row is followed by its read-back row with the same OLD.
+    key="$type ${F[1]}"
+    if [[ $type == file || $type == sysfile ]]; then
+      if [[ -n ${_replay_seen["$key"]:-} ]]; then
+        _replay_mark "$dir" "$n"
+        continue
+      fi
+      _replay_seen["$key"]=1
+    elif [[ $type == dconf ]]; then
+      if [[ -n ${_replay_dconf_old["$key"]+x} && ${_replay_dconf_old["$key"]} == "${F[2]}" ]]; then
+        _replay_mark "$dir" "$n"
+        continue
+      fi
+      _replay_dconf_old["$key"]=${F[2]}
+    fi
+    if [[ -n ${_replay_done["$n"]:-} ]]; then continue; fi
     if ! declare -F "_replay_$type" >/dev/null; then
       log_warn "unsupported row type '$type' in $m (left as is)"
+      rc=1
       continue
     fi
-    if ! "_replay_$type" "$dir" "$purge" "${F[@]:1}"; then
-      log_warn "could not undo $type ${F[1]}"
-      rc=1
-    fi
+    st=0
+    "_replay_$type" "$dir" "$purge" "${F[@]:1}" || st=$?
+    case $st in
+      0) _replay_mark "$dir" "$n" ;;
+      2) ;;
+      *)
+        log_warn "could not undo $type ${F[1]}"
+        rc=1
+        ;;
+    esac
   done
   return "$rc"
 }
@@ -285,21 +343,42 @@ _replay_dconf() {
   log_info "restored $key"
 }
 
-# _rm_ok PATH: reject obviously wrong recursive-removal targets.
+# _rm_ok PATH: PATH is a sane recursive-removal target that this manifest
+# created (it has a `dir` row). Only valid inside backup_replay.
 _rm_ok() {
   local p=$1
   if [[ $p != /?* || $p == */ || $p == *"/.."* || $p == "${HOME%/}" || $p == "${SYS_ROOT:-/}" ]]; then
     log_warn "refusing to remove $p"
     return 1
   fi
+  if [[ -z ${_replay_dir_paths["$p"]:-} ]]; then
+    log_warn "kept $p (not created by this install: no dir row)"
+    return 1
+  fi
 }
 
-# _rm_tree PATH: rm -rf PATH (guarded).
+# _as_owner PATH CMD...: run CMD directly, or via as_root when PATH's parent
+# is not writable (system dirs); without --system that is reported as pending.
+_as_owner() {
+  local p=$1 parent
+  shift
+  parent=${p%/*}
+  parent=${parent:-/}
+  if [[ -w $parent ]]; then
+    run "$@"
+  else
+    _need_system "$p" || return 1
+    as_root "$@"
+  fi
+}
+
+# _rm_tree PATH: rm -rf PATH, only when _rm_ok. A refused target is reported
+# and counts as done (it can never become removable).
 _rm_tree() {
   local p=$1
-  _rm_ok "$p" || return 1
   if [[ ! -e $p && ! -L $p ]]; then return 0; fi
-  run rm -rf -- "$p" || return 1
+  _rm_ok "$p" || return 0
+  _as_owner "$p" rm -rf -- "$p" || return 1
   log_info "removed $p"
 }
 
@@ -313,7 +392,7 @@ _replay_dir() {
   local purge=$2 path=$3
   if [[ -L $path || ! -d $path ]]; then return 0; fi
   if _dir_empty "$path"; then
-    run rmdir -- "$path" || return 1
+    _as_owner "$path" rmdir -- "$path" || return 1
     log_info "removed $path"
   elif [[ $purge == 1 && -n ${_replay_pkg_paths["$path"]:-} ]]; then
     _rm_tree "$path" || return 1
@@ -326,7 +405,7 @@ _replay_pkg() {
   local purge=$2 kind=$3 name=$4
   if [[ $purge != 1 ]]; then
     log_info "kept $kind $name (use --purge to remove)"
-    return 0
+    return 2
   fi
   case $kind in
     flatpak)
@@ -346,12 +425,7 @@ _replay_pkg() {
       fi
       ;;
     sysdir)
-      if [[ -e $name || -L $name ]]; then
-        _rm_ok "$name" || return 1
-        _need_system "$name" || return 1
-        as_root rm -rf -- "$name" || return 1
-        log_info "removed $name"
-      fi
+      _rm_tree "$name" || return 1
       ;;
     *)
       log_warn "unknown pkg kind '$kind' for $name (left as is)"

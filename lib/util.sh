@@ -106,7 +106,7 @@ _ensure_parent_dirs() {
 atomic_write() {
   local dest=$1 mode=${2:-} dir tmp
   _abs_path "$dest"
-  if [[ -n $mode ]]; then mode=$(_octal_mode "$mode"); fi
+  if [[ -n $mode ]]; then mode=$(_octal_mode "$mode") || return 1; fi
   if _dry; then
     cat >/dev/null
     log_dry "write $dest"
@@ -123,7 +123,9 @@ atomic_write() {
     fi
   fi
   tmp=$(mktemp "$dir/.tnu.tmp.XXXXXXXX") || return 1
-  if ! cat >"$tmp" || ! chmod "$mode" -- "$tmp" || ! mv -fT -- "$tmp" "$dest"; then
+  # fsync the content before the rename so a crash never leaves an empty DEST.
+  if ! cat >"$tmp" || ! chmod "$mode" -- "$tmp" || ! sync -- "$tmp" ||
+    ! mv -fT -- "$tmp" "$dest"; then
     rm -f -- "$tmp"
     log_error "failed to write $dest"
     return 1
@@ -136,7 +138,9 @@ _same_file() {
   [[ -f $dest ]] || return 1
   cmp -s -- "$src" "$dest" || return 1
   if [[ -n $mode ]]; then
-    [[ $(stat -L -c %a -- "$dest") == "$(_octal_mode "$mode")" ]] || return 1
+    local want
+    want=$(_octal_mode "$mode") || return 1
+    [[ $(stat -L -c %a -- "$dest") == "$want" ]] || return 1
   fi
 }
 
@@ -194,8 +198,17 @@ _checksum_entry() {
   die "no download entry for $name in $sums"
 }
 
+# TNU_DRY_NOT_CACHED: download_verified's status in dry-run when NAME is not cached.
+TNU_DRY_NOT_CACHED=10
+
 # download_verified NAME: echo the path of a cached, checksum-verified copy of NAME.
-# Dry-run without a valid cached copy: logs and returns 1 without downloading.
+# Contract:
+#   status 0  -> stdout is the cached path (verified against the checksum file).
+#   status 10 ($TNU_DRY_NOT_CACHED) -> DRY_RUN=1 and no valid cached copy: logs
+#             "[dry-run] download ...", prints nothing, downloads nothing. Callers
+#             in dry-run should note_change instead of using the file.
+#   otherwise it dies (status 1): unknown NAME, bad checksum entry, OFFLINE=1
+#             without a valid cache, download failure, "checksum mismatch for NAME".
 download_verified() {
   local name=$1 entry sha url cache tmp
   if [[ ! $name =~ ^[A-Za-z0-9._+-]+$ || $name == . || $name == .. ]]; then
@@ -217,7 +230,7 @@ download_verified() {
   if [[ ${OFFLINE:-0} == 1 ]]; then die "$name is not cached and --offline is set"; fi
   if _dry; then
     log_dry "download $name from $url"
-    return 1
+    return "$TNU_DRY_NOT_CACHED"
   fi
   mkdir -p -- "$CACHE_DIR" || die "cannot create $CACHE_DIR"
   tmp=$(mktemp "$CACHE_DIR/.$name.part.XXXXXXXX") || die "mktemp failed in $CACHE_DIR"
