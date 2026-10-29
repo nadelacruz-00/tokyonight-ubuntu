@@ -40,8 +40,8 @@ _osk_keymap() {
 
 # _osk_layouts: merge our layouts into custom-layout and select them.
 _osk_layouts() {
-  local km cache cur split portrait lit
-  local -a merge
+  local km cache cur out split lit
+  local -a parsed
   km=$(_osk_keymap)
   cache=${XDG_CACHE_HOME:-$HOME/.cache}/gjs-osk/keycodes/$km.json
   if [[ ! -f $cache ]]; then
@@ -49,16 +49,17 @@ _osk_layouts() {
     return 0
   fi
   cur=$(dget "$_OSK_KEY/custom-layout") || die "cannot read custom-layout"
-  merge=(python3 -I "$TNU_ROOT/helpers/osk_layouts.py" merge --keycodes "$cache" --current "$cur")
-  if ! lit=$("${merge[@]}" --field custom_layout); then
+  if ! out=$(python3 -I "$TNU_ROOT/helpers/osk_layouts.py" merge --keycodes "$cache" --current "$cur"); then
     log_warn "cannot build the split layout for keymap $km; leaving the layouts alone"
     return 0
   fi
-  split=$("${merge[@]}" --field split_index) || die "osk_layouts failed"
-  portrait=$("${merge[@]}" --field portrait_index) || die "osk_layouts failed"
+  # line 1: split layout index, line 2: custom-layout literal
+  mapfile -t parsed < <(python3 -I -c 'import json,sys;d=json.loads(sys.stdin.read());print(d["split_index"]);print(d["custom_layout"])' <<<"$out")
+  split=${parsed[0]}
+  lit=${parsed[1]}
   dset "$_OSK_KEY/custom-layout" "$lit"
   dset "$_OSK_KEY/layout-landscape" "$split"
-  dset "$_OSK_KEY/layout-portrait" "$portrait"
+  dset "$_OSK_KEY/layout-portrait" "$split"
 }
 
 # _osk_sizing: schema types (org.gnome.shell.extensions.gjsosk): all *-percent

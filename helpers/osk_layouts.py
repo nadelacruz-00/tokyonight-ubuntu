@@ -8,12 +8,12 @@ physical key that produces it under the active keymap (looked up from gjs-osk's
 keycode cache, passed in as a file).
 
 Usage:
-  osk_layouts.py merge --keycodes FILE --current LITERAL [--field NAME]
+  osk_layouts.py merge --keycodes FILE --current LITERAL
 
 LITERAL is the current `custom-layout` value as dconf prints it (a GVariant
 string holding a JSON array of JSON-encoded layouts), or empty when unset.
-Prints {"custom_layout": GVARIANT_LITERAL, "split_index": N, "portrait_index":
-N+1}; with --field, only that field, unquoted.
+Prints {"custom_layout": GVARIANT_LITERAL, "split_index": N} as JSON. N is the
+index of the split layout, used for both orientations.
 """
 
 import argparse
@@ -182,7 +182,6 @@ def merge(keycodes, current):
         # compact outer array, as gjs-osk itself writes it (JSON.stringify)
         "custom_layout": gv_string(json.dumps(layouts, separators=(",", ":"))),
         "split_index": NUM_BUILTIN + len(keep),
-        "portrait_index": NUM_BUILTIN + len(keep) + 1,
     }
 
 
@@ -192,7 +191,6 @@ def main(argv=None):
     m = sub.add_parser("merge", help="merge our layouts into the current custom-layout")
     m.add_argument("--keycodes", required=True, help="gjs-osk keycode cache JSON for the active keymap")
     m.add_argument("--current", default="", help="current custom-layout GVariant literal, or empty")
-    m.add_argument("--field", choices=["custom_layout", "split_index", "portrait_index"])
     args = ap.parse_args(argv)
     try:
         with open(args.keycodes, encoding="utf-8") as fh:
@@ -201,10 +199,7 @@ def main(argv=None):
     except (OSError, ValueError, KeyError) as exc:
         print(f"osk_layouts: {exc}", file=sys.stderr)
         return 1
-    if args.field:
-        print(result[args.field])
-    else:
-        print(json.dumps(result, ensure_ascii=False))
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 

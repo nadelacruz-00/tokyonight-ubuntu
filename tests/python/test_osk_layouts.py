@@ -60,7 +60,6 @@ class OskLayoutsTest(unittest.TestCase):
     def test_indexes_with_no_existing_layouts(self):
         res = self.cli("us+colemak")
         self.assertEqual(res["split_index"], 10)
-        self.assertEqual(res["portrait_index"], 11)
         self.assertEqual(self.split_layout(res)[-1]["name"], "gboard-qwerty-split")
 
     def test_merge_is_idempotent(self):
@@ -79,7 +78,6 @@ class OskLayoutsTest(unittest.TestCase):
         self.assertEqual(lits[0], mine)
         self.assertEqual(len(lits), 3)
         self.assertEqual(res["split_index"], 11)
-        self.assertEqual(res["portrait_index"], 12)
 
     def test_gv_string_roundtrip_and_quoting(self):
         for text in ["[]", 'a"b\\c', "it's", "tab\tnl\n", "é😀", "q'\"x"]:

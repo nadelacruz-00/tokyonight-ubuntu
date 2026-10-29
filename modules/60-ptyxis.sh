@@ -62,7 +62,7 @@ ptyxis_apply() {
   _ptyxis_profile_uuid
   u=$_PTYXIS_UUID
   if ((_PTYXIS_NEW)); then
-    _gvlist_edit add "$_PTYXIS/profile-uuids" "$u"
+    gvlist_add "$_PTYXIS/profile-uuids" "$u"
     dset "$_PTYXIS/default-profile-uuid" "$(gv_str "$u")"
     dset "$_PTYXIS/Profiles/$u/label" "$(gv_str 'Tokyo Night')"
   fi

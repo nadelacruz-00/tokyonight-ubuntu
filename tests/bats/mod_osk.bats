@@ -82,7 +82,7 @@ make_erhai() {
   assert_success
   refute_output --partial "open the on-screen keyboard"
   assert_equal "$(dconf_get $K/layout-landscape)" 10
-  assert_equal "$(dconf_get $K/layout-portrait)" 11
+  assert_equal "$(dconf_get $K/layout-portrait)" 10
   local lit
   lit=$(dconf_get $K/custom-layout)
   run python3 -I -c '
@@ -120,7 +120,7 @@ print(json.loads(items[10 - o.NUM_BUILTIN])[-1]["name"], json.loads(items[11 - o
   run grep -o 'gboard-qwerty-split' <<<"$(dconf_get $K/custom-layout)"
   assert_equal "${#lines[@]}" 1
   assert_equal "$(dconf_get $K/layout-landscape)" 11
-  assert_equal "$(dconf_get $K/layout-portrait)" 12
+  assert_equal "$(dconf_get $K/layout-portrait)" 11
 }
 
 @test "split-flush only with --system on erhai" {
