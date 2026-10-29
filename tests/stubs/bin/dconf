@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Stub: 'dconf read KEY' | 'write KEY VALUE' | 'reset [-f] KEY|DIR/' | 'dump DIR/' | 'list DIR/'.
 # State: $STUB_STATE/dconf.tsv (key<TAB>value).
+# Like real dconf, 'write' stores string and string-array literals in GLib's
+# canonical print form ("x'y" not 'x\'y', ['a', 'b'] not ['a','b']); other
+# values are stored as given.
 # shellcheck disable=SC2016 # awk programs are single-quoted on purpose
 set -Eeuo pipefail
 shopt -s inherit_errexit
@@ -11,6 +14,74 @@ if (($#)); then args=$(printf '%q ' "$@"); fi
 printf '%s\t%s\n' "${0##*/}" "${args% }" >>"${STUB_LOG:-/dev/null}"
 db="${STUB_STATE:?}/dconf.tsv"
 touch "$db"
+CANON='
+import sys, unicodedata
+ESC = {"a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v"}
+def parse(v, i):
+    q, i, out = v[i], i + 1, []
+    while i < len(v):
+        ch = v[i]
+        if ch == "\\":
+            e = v[i + 1]
+            if e in ESC:
+                out.append(ESC[e]); i += 2
+            elif e == "u":
+                out.append(chr(int(v[i + 2:i + 6], 16))); i += 6
+            elif e == "U":
+                out.append(chr(int(v[i + 2:i + 10], 16))); i += 10
+            else:
+                out.append(e); i += 2
+        elif ch == q:
+            return "".join(out), i + 1
+        else:
+            out.append(ch); i += 1
+    raise ValueError("unterminated")
+def show(s):
+    q = "\"" if "\x27" in s else "\x27"
+    rev = {7: "a", 8: "b", 12: "f", 10: "n", 13: "r", 9: "t", 11: "v"}
+    out = [q]
+    for ch in s:
+        c = ord(ch)
+        if ch in (q, "\\"):
+            out.append("\\")
+        if unicodedata.category(ch) not in ("Cc", "Cf", "Cn", "Cs"):
+            out.append(ch)
+        elif c in rev:
+            out.append("\\" + rev[c])
+        else:
+            out.append(("\\u%04x" if c < 0x10000 else "\\U%08x") % c)
+    return "".join(out) + q
+def canon(v):
+    s = v.strip()
+    if s[:1] in ("\x27", "\""):
+        t, j = parse(s, 0)
+        if s[j:].strip():
+            raise ValueError("trailing")
+        return show(t)
+    if s[:1] == "[" and s[-1:] == "]":
+        rest, items = s[1:-1].strip(), []
+        if not rest:
+            raise ValueError("untyped empty array")
+        while True:
+            if rest[:1] not in ("\x27", "\""):
+                raise ValueError("not a string array")
+            t, j = parse(rest, 0)
+            items.append(show(t))
+            rest = rest[j:].lstrip()
+            if not rest:
+                break
+            if rest[0] != ",":
+                raise ValueError("bad separator")
+            rest = rest[1:].lstrip()
+        return "[" + ", ".join(items) + "]"
+    raise ValueError("not a string")
+v = sys.argv[1]
+try:
+    v = canon(v)
+except (ValueError, IndexError):
+    pass
+sys.stdout.write(v + "\n")
+'
 filter() { # filter <awk-args...>: rewrite db through awk
   local tmp
   tmp=$(mktemp)
@@ -20,8 +91,9 @@ filter() { # filter <awk-args...>: rewrite db through awk
 case "${1:-}" in
   read) awk -F'\t' -v k="${2:-}" '$1==k{v=$2} END{if(v!="")print v}' "$db" ;;
   write)
+    val=$(python3 -I -c "$CANON" "$3")
     filter -v k="$2" '$1!=k'
-    printf '%s\t%s\n' "$2" "$3" >>"$db"
+    printf '%s\t%s\n' "$2" "$val" >>"$db"
     ;;
   reset)
     shift
