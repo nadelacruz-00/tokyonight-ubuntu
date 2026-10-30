@@ -12,9 +12,6 @@ _pngs() {
 }
 
 @test "every image referenced in README exists" {
-  if [[ -z $(_pngs) ]]; then
-    skip "docs/screenshots has no PNGs yet (captured later with tools/screenshots.sh)"
-  fi
   local img n=0
   while IFS= read -r img; do
     n=$((n + 1))
